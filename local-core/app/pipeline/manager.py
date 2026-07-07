@@ -11,6 +11,7 @@ import os
 from typing import Optional
 
 from ..notify import NotificationEngine
+from ..snapshots import SnapshotStore
 from ..store import (
     EventStore, MetricStore, NotificationStore, RuleStore, SessionStore,
 )
@@ -76,7 +77,9 @@ class RuntimeManager:
 
         notifier = NotificationEngine(
             RuleStore(self._db), NotificationStore(self._db), self._bcast)
-        sink = DbStateSink(EventStore(self._db), SessionStore(self._db), notifier)
+        snapshots = SnapshotStore(os.environ.get("STRIKEE_SNAPSHOT_DIR", "snapshots"))
+        sink = DbStateSink(EventStore(self._db), SessionStore(self._db), notifier,
+                           snapshot_store=snapshots)
         sampler = MetricStore(self._db)
 
         # Field-test tunables via env (no code edit needed at the venue).

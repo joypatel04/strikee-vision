@@ -95,6 +95,29 @@ Leave it running during normal operation (a couple of hours is ideal). Then:
 
 That comparison is the go/no-go answer on camera angle + detection quality.
 
+### Games log + evidence snapshots (staff reconciliation)
+
+Every game start saves a **labelled, timestamped snapshot** (e.g. "Table 1
+2026-07-08 14:23:05") to `snapshots/<venue>/<date>/`. See the **"Games today"**
+panel on the dashboard, or the report:
+
+```
+GET /api/venues/{venue_id}/games?date=2026-07-08
+```
+
+Each entry has the table, start/end time, duration, and a link to the snapshot —
+so you can compare the system's game log against what staff recorded and spot
+discrepancies. Snapshots are stored **locally** (works offline). To auto-delete
+after a week, run cleanup (e.g. a nightly/weekly scheduled task):
+
+```python
+from app.snapshots import SnapshotStore
+SnapshotStore().cleanup(keep_days=7)
+```
+
+Optional cloud backup: set `STRIKEE_S3_BUCKET` (needs `boto3` + AWS creds) to
+best-effort upload each snapshot to S3.
+
 ## Tuning (no code edits — set env vars, then restart `strikee-core`)
 
 | Symptom | Knob | Try |

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .api import all_routers
@@ -52,6 +53,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
     for router in all_routers():
         app.include_router(router)
     app.include_router(build_runtime_router())
+
+    # serve game-start evidence snapshots
+    snap_dir = Path(os.environ.get("STRIKEE_SNAPSHOT_DIR", "snapshots"))
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/snapshots", StaticFiles(directory=str(snap_dir)), name="snapshots")
 
     # --- live pipeline control (M2) ---------------------------------------
 

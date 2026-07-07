@@ -159,6 +159,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     end_event_id      TEXT,
     orig_start_ts     TEXT,                -- preserved when corrected
     orig_end_ts       TEXT,
+    start_snapshot    TEXT,                -- evidence image path saved at game start
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL
 );

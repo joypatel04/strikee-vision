@@ -1,0 +1,76 @@
+"""Snapshot store: saves a labelled evidence image when a game starts.
+
+Images go to a local, date-organised folder (works fully offline). Each image is
+stamped with the asset name and timestamp so staff reconciliation is
+self-explanatory. Optional best-effort S3 upload and a weekly cleanup are
+provided; local storage is the reliable default.
+
+Layout:  <base>/<venue_id>/<YYYY-MM-DD>/<asset>_<HHMMSS>.jpg
+"""
+from __future__ import annotations
+
+import os
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Optional
+
+
+def _safe(name: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)[:40]
+
+
+class SnapshotStore:
+    def __init__(self, base_dir: str = "snapshots", s3_bucket: Optional[str] = None):
+        self.base = Path(base_dir)
+        self.s3_bucket = s3_bucket or os.environ.get("STRIKEE_S3_BUCKET")
+
+    def save(self, venue_id: str, asset_id: str, asset_name: str, frame,
+             ts: Optional[str] = None) -> Optional[str]:
+        """Write a labelled JPEG and return its path relative to base (or None
+        if the frame is missing). `frame` is a BGR numpy array."""
+        if frame is None:
+            return None
+        import cv2  # lazy
+
+        now = datetime.now(timezone.utc).astimezone()
+        date_dir = now.strftime("%Y-%m-%d")
+        stamp = now.strftime("%H%M%S")
+        rel = os.path.join(_safe(venue_id), date_dir, f"{_safe(asset_name)}_{stamp}.jpg")
+        path = self.base / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        labelled = frame.copy()
+        caption = f"{asset_name}  {now.strftime('%Y-%m-%d %H:%M:%S')}"
+        cv2.rectangle(labelled, (0, 0), (labelled.shape[1], 34), (0, 0, 0), -1)
+        cv2.putText(labelled, caption, (8, 24), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7, (255, 255, 255), 2)
+        cv2.imwrite(str(path), labelled)
+
+        self._maybe_upload(path, rel)
+        return rel
+
+    def _maybe_upload(self, path: Path, key: str) -> None:
+        if not self.s3_bucket:
+            return
+        try:  # best-effort; never block the pipeline
+            import boto3  # lazy, optional
+            boto3.client("s3").upload_file(str(path), self.s3_bucket, key)
+        except Exception:
+            pass
+
+    def cleanup(self, keep_days: int = 7) -> int:
+        """Delete snapshot images older than keep_days. Returns count removed.
+        Run this weekly (or nightly) — e.g. from a scheduled task."""
+        if not self.base.exists():
+            return 0
+        cutoff = datetime.now(timezone.utc).astimezone() - timedelta(days=keep_days)
+        removed = 0
+        for f in self.base.rglob("*.jpg"):
+            try:
+                mtime = datetime.fromtimestamp(f.stat().st_mtime).astimezone()
+                if mtime < cutoff:
+                    f.unlink()
+                    removed += 1
+            except Exception:
+                pass
+        return removed

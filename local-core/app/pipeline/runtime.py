@@ -124,6 +124,23 @@ class LiveRuntime:
         self.motion_threshold = motion_threshold
         self._last_label: dict[str, str] = {}
         self._prev_points: dict[str, list] = {}
+        self._last_frames: dict[str, object] = {}   # source_id -> last frame
+
+        # map each asset to its primary (or first) source, for snapshots
+        self._asset_source: dict[str, str] = {}
+        for src in sources:
+            for sensor in src.sensors:
+                cur = self._asset_source.get(sensor.asset_id)
+                if cur is None or sensor.role == "primary":
+                    self._asset_source[sensor.asset_id] = src.id
+
+        # let the sink pull the current frame for an asset (for game snapshots)
+        if self.sink is not None and hasattr(self.sink, "frame_provider") \
+                and self.sink.frame_provider is None:
+            self.sink.frame_provider = self.frame_for_asset
+
+    def frame_for_asset(self, asset_id: str):
+        return self._last_frames.get(self._asset_source.get(asset_id))
 
     def current_snapshots(self) -> list[AssetSnapshot]:
         return [self.engine.snapshot(a) for a in self.assets]
@@ -142,6 +159,7 @@ class LiveRuntime:
             if fs is not None:
                 ok, frame = fs.read()
                 if ok:
+                    self._last_frames[src.id] = frame
                     if kinds & PERSON_KINDS and self.detector is not None:
                         person = self.detector.detect(frame)
                     if SNOOKER_KIND in kinds and self.snooker_detector is not None:

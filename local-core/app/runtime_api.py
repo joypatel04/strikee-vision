@@ -129,6 +129,32 @@ def build_runtime_router() -> APIRouter:
             raise HTTPException(404, "notification not found")
         return n
 
+    @router.get("/api/venues/{venue_id}/games")
+    def games_report(venue_id: str, date: Optional[str] = None,
+                     db: Database = Depends(get_db)):
+        """Daily games log for staff reconciliation: each game with its start
+        time, duration, table, status, and evidence snapshot. `date` filters to
+        YYYY-MM-DD (start_ts prefix); omit for the most recent games."""
+        rows = SessionStore(db).list(venue_id, limit=500)
+        if date:
+            rows = [r for r in rows if (r["start_ts"] or "").startswith(date)]
+        # attach asset names
+        names = {}
+        with db.cursor() as cur:
+            cur.execute("SELECT id, name FROM assets WHERE venue_id = ?", (venue_id,))
+            names = {r["id"]: r["name"] for r in cur.fetchall()}
+        games = [{
+            "session_id": r["id"],
+            "table": names.get(r["asset_id"], r["asset_id"]),
+            "business_unit_id": r["business_unit_id"],
+            "start_ts": r["start_ts"],
+            "end_ts": r["end_ts"],
+            "duration_sec": r["duration_sec"],
+            "status": r["status"],
+            "snapshot": f"/snapshots/{r['start_snapshot']}" if r.get("start_snapshot") else None,
+        } for r in rows]
+        return {"date": date, "count": len(games), "games": games}
+
     @router.get("/api/venues/{venue_id}/review-queue")
     def review_queue(venue_id: str, db: Database = Depends(get_db)):
         """Things needing a human: unreviewed sessions + open notifications."""

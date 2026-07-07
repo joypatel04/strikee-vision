@@ -99,17 +99,19 @@ class SessionStore:
 
     def open(self, venue_id: str, asset_id: str, business_unit_id: Optional[str],
              start_ts: str, confidence: float = 0.0,
-             start_event_id: Optional[str] = None) -> dict:
+             start_event_id: Optional[str] = None,
+             start_snapshot: Optional[str] = None) -> dict:
         rec_id = new_id()
         ts = now_iso()
         with self.db.cursor() as cur:
             cur.execute(
                 """INSERT INTO sessions
                    (id, venue_id, asset_id, business_unit_id, type, start_ts,
-                    status, confidence, start_event_id, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, 'usage', ?, 'detected', ?, ?, ?, ?)""",
+                    status, confidence, start_event_id, start_snapshot,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, 'usage', ?, 'detected', ?, ?, ?, ?, ?)""",
                 (rec_id, venue_id, asset_id, business_unit_id, start_ts,
-                 confidence, start_event_id, ts, ts),
+                 confidence, start_event_id, start_snapshot, ts, ts),
             )
             cur.execute("SELECT * FROM sessions WHERE id = ?", (rec_id,))
             return dict(cur.fetchone())

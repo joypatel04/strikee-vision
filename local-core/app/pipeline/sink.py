@@ -45,10 +45,13 @@ class DbStateSink:
     not observe the asset leave).
     """
 
-    def __init__(self, event_store, session_store, notifier=None):
+    def __init__(self, event_store, session_store, notifier=None,
+                 snapshot_store=None, frame_provider=None):
         self.events = event_store
         self.sessions = session_store
         self.notifier = notifier
+        self.snapshot_store = snapshot_store       # SnapshotStore (optional)
+        self.frame_provider = frame_provider       # callable(asset_id) -> frame
 
     def handle(self, venue_id: str, changes: list[ChangeEvent]) -> None:
         for ch in changes:
@@ -73,10 +76,11 @@ class DbStateSink:
 
             if s.presence == PRESENCE_PRESENT:
                 if self.sessions.get_open_for_asset(s.asset_id) is None:
+                    snapshot = self._capture_snapshot(venue_id, s)
                     session = self.sessions.open(
                         venue_id, s.asset_id, s.business_unit_id,
                         start_ts=s.effective_at, confidence=s.confidence,
-                        start_event_id=evt["id"],
+                        start_event_id=evt["id"], start_snapshot=snapshot,
                     )
                     self.events.append({
                         "venue_id": venue_id, "asset_id": s.asset_id,
@@ -84,7 +88,8 @@ class DbStateSink:
                         "type": "session_start", "ts": s.effective_at,
                         "origin": "system", "correlation_id": session["id"],
                     })
-            elif s.presence == PRESENCE_ABSENT:
+                    continue  # handled this change
+            if s.presence == PRESENCE_ABSENT:
                 open_session = self.sessions.get_open_for_asset(s.asset_id)
                 if open_session is not None:
                     self.sessions.close(open_session["id"], end_ts=s.effective_at,
@@ -95,3 +100,16 @@ class DbStateSink:
                         "type": "session_end", "ts": s.effective_at,
                         "origin": "system", "correlation_id": open_session["id"],
                     })
+
+    def _capture_snapshot(self, venue_id: str, s: AssetSnapshot):
+        """Save a labelled evidence image at game start (best-effort)."""
+        if self.snapshot_store is None or self.frame_provider is None:
+            return None
+        frame = self.frame_provider(s.asset_id)
+        if frame is None:
+            return None
+        try:
+            return self.snapshot_store.save(venue_id, s.asset_id, s.name, frame,
+                                            s.effective_at)
+        except Exception:
+            return None
