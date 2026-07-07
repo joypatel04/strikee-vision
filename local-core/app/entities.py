@@ -81,6 +81,17 @@ class SensorIn(BaseModel):
     params: Optional[dict] = None
 
 
+class RuleIn(BaseModel):
+    venue_id: str
+    name: str
+    template_type: str
+    enabled: bool = True
+    severity: str = "warning"
+    cooldown_sec: int = 300
+    channel: str = "in_app"
+    params: Optional[dict] = None
+
+
 def _partial(name: str, model: type[BaseModel]) -> type[BaseModel]:
     """Build an all-optional variant of a write-model for PATCH bodies."""
     fields = {
@@ -138,5 +149,10 @@ REGISTRY: list[EntitySpec] = [
                 "conf_threshold", "enabled", "params"],
                parents={"asset_id": "asset_id", "video_source_id": "video_source_id",
                         "zone_id": "zone_id"},
+               json_columns={"params"}, bool_columns={"enabled"}),
+    EntitySpec("rule", "rules", "rules", RuleIn,
+               ["venue_id", "name", "template_type", "enabled", "severity",
+                "cooldown_sec", "channel", "params"],
+               parents={"venue_id": "venue_id"},
                json_columns={"params"}, bool_columns={"enabled"}),
 ]

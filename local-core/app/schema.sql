@@ -182,3 +182,47 @@ CREATE TABLE IF NOT EXISTS metric_samples (
 
 CREATE INDEX IF NOT EXISTS idx_samples_venue_ts   ON metric_samples(venue_id, ts);
 CREATE INDEX IF NOT EXISTS idx_samples_asset_metric ON metric_samples(asset_id, metric, ts);
+
+-- ── Rules + Notifications (M5) ─────────────────────────────────────────
+-- Rules are instances of a fixed template catalog (see app/notify.py). Users
+-- tune params + toggle enabled; no free-form logic.
+CREATE TABLE IF NOT EXISTS rules (
+    id             TEXT PRIMARY KEY,
+    venue_id       TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    template_type  TEXT NOT NULL,        -- label_became | health_became | ...
+    enabled        INTEGER NOT NULL DEFAULT 1,
+    severity       TEXT NOT NULL DEFAULT 'warning',   -- info | warning | critical
+    cooldown_sec   INTEGER NOT NULL DEFAULT 300,
+    channel        TEXT NOT NULL DEFAULT 'in_app',    -- in_app | email | sms | webhook
+    params         TEXT,                 -- JSON matcher config
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rules_venue ON rules(venue_id);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id                TEXT PRIMARY KEY,
+    venue_id          TEXT NOT NULL,
+    rule_id           TEXT,
+    event_id          TEXT,
+    asset_id          TEXT,
+    business_unit_id  TEXT,
+    severity          TEXT NOT NULL DEFAULT 'warning',
+    status            TEXT NOT NULL DEFAULT 'pending',  -- pending|delivered|acknowledged
+                                                        -- |resolved|suppressed|failed
+    channel           TEXT NOT NULL DEFAULT 'in_app',
+    title             TEXT,
+    message           TEXT,
+    acknowledged_by   TEXT,
+    acknowledged_at   TEXT,
+    resolved_by       TEXT,
+    resolved_at       TEXT,
+    reason            TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifs_venue_status ON notifications(venue_id, status);
+CREATE INDEX IF NOT EXISTS idx_notifs_rule_asset   ON notifications(rule_id, asset_id, created_at);

@@ -7,8 +7,11 @@ from pydantic import BaseModel
 from .analytics import AnalyticsStore
 from .api import get_db
 from .db import Database
+from .notify import RULE_TEMPLATES
 from .review import ReviewService
-from .store import EventStore, MetricStore, SessionStore
+from .store import (
+    EventStore, MetricStore, NotificationStore, SessionStore,
+)
 
 
 class CorrectBody(BaseModel):
@@ -98,5 +101,42 @@ def build_runtime_router() -> APIRouter:
     def analytics_occupancy(venue_id: str, asset_id: str, metric: str = "present",
                             db: Database = Depends(get_db)):
         return AnalyticsStore(db).occupancy_series(venue_id, asset_id, metric=metric)
+
+    # --- rule templates + notifications (M5) ------------------------------
+
+    @router.get("/api/rule-templates")
+    def rule_templates():
+        return RULE_TEMPLATES
+
+    @router.get("/api/venues/{venue_id}/notifications")
+    def list_notifications(venue_id: str, status: Optional[str] = None,
+                           limit: int = 100, db: Database = Depends(get_db)):
+        return NotificationStore(db).list(venue_id, status=status, limit=limit)
+
+    @router.post("/api/notifications/{notif_id}/ack")
+    def ack_notification(notif_id: str, body: ActorBody = ActorBody(),
+                         db: Database = Depends(get_db)):
+        n = NotificationStore(db).acknowledge(notif_id, actor=body.actor)
+        if n is None:
+            raise HTTPException(404, "notification not found")
+        return n
+
+    @router.post("/api/notifications/{notif_id}/resolve")
+    def resolve_notification(notif_id: str, body: ActorBody = ActorBody(),
+                             db: Database = Depends(get_db)):
+        n = NotificationStore(db).resolve(notif_id, actor=body.actor, reason=body.reason)
+        if n is None:
+            raise HTTPException(404, "notification not found")
+        return n
+
+    @router.get("/api/venues/{venue_id}/review-queue")
+    def review_queue(venue_id: str, db: Database = Depends(get_db)):
+        """Things needing a human: unreviewed sessions + open notifications."""
+        sessions = [s for s in SessionStore(db).list(venue_id, limit=200)
+                    if s["status"] == "detected"]
+        notifs = [n for n in NotificationStore(db).list(venue_id, limit=200)
+                  if n["status"] in ("pending", "delivered", "acknowledged")]
+        return {"sessions": sessions, "notifications": notifs,
+                "total": len(sessions) + len(notifs)}
 
     return router

@@ -45,9 +45,10 @@ class DbStateSink:
     not observe the asset leave).
     """
 
-    def __init__(self, event_store, session_store):
+    def __init__(self, event_store, session_store, notifier=None):
         self.events = event_store
         self.sessions = session_store
+        self.notifier = notifier
 
     def handle(self, venue_id: str, changes: list[ChangeEvent]) -> None:
         for ch in changes:
@@ -66,6 +67,9 @@ class DbStateSink:
                 "confidence": s.confidence,
                 "origin": "system",
             })
+
+            if self.notifier is not None:
+                self.notifier.on_event(venue_id, evt)
 
             if s.presence == PRESENCE_PRESENT:
                 if self.sessions.get_open_for_asset(s.asset_id) is None:

@@ -7,7 +7,7 @@ def test_health_ok(client):
     # all nine config entities are exposed
     assert set(body["entities"]) == {
         "organizations", "venues", "business-units", "spaces",
-        "video-sources", "asset-types", "assets", "zones", "sensors",
+        "video-sources", "asset-types", "assets", "zones", "sensors", "rules",
     }
 
 

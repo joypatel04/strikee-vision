@@ -203,3 +203,93 @@ class MetricStore:
         with self.db.cursor() as cur:
             cur.execute(sql, args)
             return [dict(r) for r in cur.fetchall()]
+
+
+class RuleStore:
+    def __init__(self, db):
+        self.db = db
+
+    def list_enabled(self, venue_id: str) -> list[dict]:
+        import json
+        with self.db.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM rules WHERE venue_id = ? AND enabled = 1", (venue_id,)
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+        for r in rows:
+            r["params"] = json.loads(r["params"]) if r.get("params") else {}
+        return rows
+
+
+class NotificationStore:
+    def __init__(self, db):
+        self.db = db
+
+    def create(self, n: dict) -> dict:
+        rec_id = new_id()
+        ts = now_iso()
+        cols = ["venue_id", "rule_id", "event_id", "asset_id", "business_unit_id",
+                "severity", "status", "channel", "title", "message"]
+        present = [c for c in cols if c in n]
+        col_names = ", ".join(["id", *present, "created_at", "updated_at"])
+        placeholders = ", ".join(["?"] * (len(present) + 3))
+        values = [rec_id, *[n[c] for c in present], ts, ts]
+        with self.db.cursor() as cur:
+            cur.execute(
+                f"INSERT INTO notifications ({col_names}) VALUES ({placeholders})",
+                values,
+            )
+            cur.execute("SELECT * FROM notifications WHERE id = ?", (rec_id,))
+            return dict(cur.fetchone())
+
+    def get(self, notif_id: str) -> Optional[dict]:
+        with self.db.cursor() as cur:
+            cur.execute("SELECT * FROM notifications WHERE id = ?", (notif_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def list(self, venue_id: str, status: Optional[str] = None,
+             limit: int = 100) -> list[dict]:
+        sql = "SELECT * FROM notifications WHERE venue_id = ?"
+        args: list = [venue_id]
+        if status:
+            sql += " AND status = ?"
+            args.append(status)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        args.append(limit)
+        with self.db.cursor() as cur:
+            cur.execute(sql, args)
+            return [dict(r) for r in cur.fetchall()]
+
+    def last_created_at(self, rule_id: str, asset_id: Optional[str]) -> Optional[str]:
+        with self.db.cursor() as cur:
+            cur.execute(
+                "SELECT created_at FROM notifications WHERE rule_id = ? "
+                "AND (asset_id = ? OR (? IS NULL AND asset_id IS NULL)) "
+                "ORDER BY created_at DESC LIMIT 1",
+                (rule_id, asset_id, asset_id),
+            )
+            row = cur.fetchone()
+            return row["created_at"] if row else None
+
+    def acknowledge(self, notif_id: str, actor: Optional[str]) -> Optional[dict]:
+        return self._transition(notif_id, "acknowledged",
+                                {"acknowledged_by": actor, "acknowledged_at": now_iso()})
+
+    def resolve(self, notif_id: str, actor: Optional[str],
+                reason: Optional[str] = None) -> Optional[dict]:
+        return self._transition(notif_id, "resolved",
+                                {"resolved_by": actor, "resolved_at": now_iso(),
+                                 "reason": reason})
+
+    def _transition(self, notif_id: str, status: str, extra: dict) -> Optional[dict]:
+        sets = ["status = ?", "updated_at = ?"] + [f"{k} = ?" for k in extra]
+        values = [status, now_iso(), *extra.values(), notif_id]
+        with self.db.cursor() as cur:
+            cur.execute(
+                f"UPDATE notifications SET {', '.join(sets)} WHERE id = ?", values
+            )
+            if cur.rowcount == 0:
+                return None
+            cur.execute("SELECT * FROM notifications WHERE id = ?", (notif_id,))
+            return dict(cur.fetchone())

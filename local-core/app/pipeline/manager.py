@@ -9,7 +9,10 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from ..store import EventStore, MetricStore, SessionStore
+from ..notify import NotificationEngine
+from ..store import (
+    EventStore, MetricStore, NotificationStore, RuleStore, SessionStore,
+)
 from .broadcast import Broadcaster
 from .runtime import LiveRuntime, build_live_runtime
 from .sink import DbStateSink
@@ -59,7 +62,9 @@ class RuntimeManager:
                 "Perception extra not installed. Run: pip install -e '.[perception]'"
             ) from exc
 
-        sink = DbStateSink(EventStore(self._db), SessionStore(self._db))
+        notifier = NotificationEngine(
+            RuleStore(self._db), NotificationStore(self._db), self._bcast)
+        sink = DbStateSink(EventStore(self._db), SessionStore(self._db), notifier)
         sampler = MetricStore(self._db)
 
         def _build():

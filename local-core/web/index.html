@@ -78,6 +78,10 @@
         <h2>Recent events</h2>
         <div id="events"></div>
       </div>
+      <div class="panel">
+        <h2>Notifications</h2>
+        <div id="notifications"></div>
+      </div>
     </div>
   </main>
 
@@ -191,6 +195,32 @@
         </div>`).join('') : '<div class="muted">No events yet.</div>';
     }
 
+    async function notifAction(id, action) {
+      await fetch(`/api/notifications/${id}/${action}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actor: 'dashboard' }),
+      });
+      loadNotifications();
+    }
+    window.notifAction = notifAction;
+
+    async function loadNotifications() {
+      if (!currentVenue) return;
+      const rows = await (await fetch(`/api/venues/${currentVenue}/notifications?limit=30`)).json();
+      const open = rows.filter(n => n.status !== 'resolved');
+      document.getElementById('notifications').innerHTML = open.length ? open.map(n => `
+        <div class="row">
+          <span class="grow">${n.title || n.severity}
+            <span class="ts">${n.message || ''}</span>
+          </span>
+          <span class="badge">${n.severity}</span>
+          <span class="badge">${n.status}</span>
+          ${n.status !== 'resolved' ? `
+            <button class="mini" onclick="notifAction('${n.id}','ack')">ack</button>
+            <button class="mini" onclick="notifAction('${n.id}','resolve')">✓</button>` : ''}
+        </div>`).join('') : '<div class="muted">No open notifications.</div>';
+    }
+
     async function selectVenue(venueId) {
       currentVenue = venueId;
       await loadAssets(venueId);
@@ -199,6 +229,7 @@
       loadSessions();
       loadEvents();
       loadAnalytics();
+      loadNotifications();
     }
 
     async function init() {
@@ -223,7 +254,7 @@
       if (venues.length) selectVenue(venues[0].id);
       else document.getElementById('empty').textContent =
         'No venues yet. Create one via POST /api/venues (see /docs).';
-      setInterval(() => { refreshStatus(); loadSessions(); loadEvents(); loadAnalytics(); }, 5000);
+      setInterval(() => { refreshStatus(); loadSessions(); loadEvents(); loadAnalytics(); loadNotifications(); }, 5000);
     }
     init();
   </script>
