@@ -13,6 +13,9 @@ dependencies = [
     "pydantic>=2.6",
 ]
 
+[project.scripts]
+strikee-core = "app.desktop:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
@@ -24,6 +27,14 @@ perception = [
     "ultralytics>=8.3",
     "opencv-python>=4.9",
     "numpy>=1.26",
+]
+# Native desktop window (otherwise the launcher falls back to the browser).
+desktop = [
+    "pywebview>=5.0",
+]
+# Building a Windows executable.
+build = [
+    "pyinstaller>=6.0",
 ]
 
 [tool.hatch.build.targets.wheel]

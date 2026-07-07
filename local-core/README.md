@@ -13,12 +13,27 @@ person-in-zone → three-facet state (presence/activity/health) with
 primary/supporting fusion and hysteresis smoothing → live asset grid pushed over
 WebSocket. Sampled every 5–10s.
 
-**M3 (current):** events + sessions. State changes are persisted as append-only
-**Events**; presence transitions open/close **materialized Sessions** (grace
-window from presence smoothing). Session **review** (confirm / correct / void)
-appends immutable correction events and preserves original times. Dashboard adds
-event feed + sessions panels with confirm/void. Metric samples + analytics land
-in M4.
+**M3:** events + sessions. State changes are persisted as append-only **Events**;
+presence transitions open/close **materialized Sessions** (grace window from
+presence smoothing). Session **review** (confirm / correct / void) appends
+immutable correction events and preserves original times.
+
+**M4:** metric samples + analytics. Periodic scalar samples per asset per tick
+feed utilization / occupancy / session analytics by Business Unit.
+
+**M5:** rule templates + tiered notifications. A fixed template catalog
+(defaults + ON/OFF) drives notifications; in-app delivers offline, network
+channels queue; ack / resolve + a review queue.
+
+**Activity (D-T4):** movement between ticks distinguishes **Active (In Use)**
+from **Occupied – Idle**.
+
+**M6:** desktop launcher (`strikee-core`) + Windows packaging — see
+[packaging/BUILD.md](packaging/BUILD.md).
+
+The product is feature-complete for a venue field test; detection thresholds,
+`motion_threshold`, and `activity_still_ticks` are the tunables to set on real
+footage.
 
 The pipeline core (geometry, state engine, runtime) imports **no heavy
 libraries** — YOLO and OpenCV sit behind protocols and are used only when a
@@ -42,6 +57,14 @@ uvicorn app.main:app --reload
 - Live dashboard: http://localhost:8000/
 - Health: http://localhost:8000/health
 - Interactive API docs: http://localhost:8000/docs
+
+Or run it as a **desktop app** (opens a native window; see
+[packaging/BUILD.md](packaging/BUILD.md)):
+
+```bash
+pip install -e ".[perception,desktop]"
+strikee-core
+```
 
 Config: `STRIKEE_DB` (db file, default `strikee.db`), `STRIKEE_TICK_SEC`
 (sample interval, default 7).
