@@ -141,7 +141,7 @@ best-effort upload each snapshot to S3.
 | Games over/under-counted | `STRIKEE_RACK_REDS` | reds needed to treat as a new rack (default 10; raise to be stricter) |
 | Mid-game re-rack (concession then new rack) missed / false | `STRIKEE_RERACK_JUMP` | how big a red-count jump counts as a re-rack (default 6; raise to be stricter) |
 | Two quick frames merged into one game | `STRIKEE_MIN_GAME_MIN` | the min game window — raise to suppress spurious quick restarts (your 15-min idea) |
-| A stuck game never ends | `STRIKEE_MAX_GAME_MIN` | force-end after this many minutes (default 45) |
+| A stuck/abandoned game never ends | `STRIKEE_MAX_GAME_MIN` | pure safety net — force-end after this many minutes (default **120**, well beyond any real frame, so a long game is never cut short). Raise if you ever have longer sessions. |
 | Missed racks | sensor confidence | lower `conf_threshold`; use the main stream |
 | "Active" vs "Idle" wrong | `STRIKEE_MOTION_THRESHOLD`, `STRIKEE_STILL_TICKS` | tune threshold / still ticks |
 | Sampling too slow/fast | `STRIKEE_TICK_SEC` | 5–10 |

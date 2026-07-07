@@ -92,8 +92,10 @@ class RuntimeManager:
         person_model = os.environ.get("STRIKEE_PERSON_MODEL", self._model)
         snooker_model = os.environ.get("STRIKEE_SNOOKER_MODEL", "best.pt")
         min_game = float(os.environ.get("STRIKEE_MIN_GAME_MIN", "0")) * 60.0
-        max_game = float(os.environ.get("STRIKEE_MAX_GAME_MIN", "45")) * 60.0
-        rack_reds = int(os.environ.get("STRIKEE_RACK_REDS", "10"))
+        # a pure safety net for a stuck/abandoned game — set well beyond any real
+        # frame (2h) so a genuinely long game is never cut short.
+        max_game = float(os.environ.get("STRIKEE_MAX_GAME_MIN", "120")) * 60.0
+        rack_reds = int(os.environ.get("STRIKEE_RACK_REDS", "8"))
         rerack_jump = int(os.environ.get("STRIKEE_RERACK_JUMP", "6"))
         kinds = self._venue_sensor_kinds(venue_id)
 

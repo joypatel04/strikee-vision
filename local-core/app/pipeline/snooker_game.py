@@ -48,22 +48,29 @@ class GameEvent:
 
 class SnookerGameTracker:
     def __init__(self, confirm_ticks: int = 2, end_hold_ticks: int = 2,
-                 restart_confirm_ticks: int = 2, rack_red_threshold: int = 10,
-                 rerack_jump: int = 6,
-                 min_game_sec: float = 0.0, max_game_sec: float = 2700.0):
+                 restart_confirm_ticks: int = 2, rack_red_threshold: int = 8,
+                 rerack_jump: int = 6, floor_confirm_ticks: int = 2,
+                 min_game_sec: float = 0.0, max_game_sec: float = 7200.0):
         self.confirm_ticks = confirm_ticks
         self.end_hold_ticks = end_hold_ticks
         self.restart_confirm_ticks = restart_confirm_ticks
         # a game also starts on a confirmed full rack (many reds), so we still
         # count games when the model never fires the game_start class.
         self.rack_red_threshold = rack_red_threshold
-        # a mid-game RE-RACK is a sudden rise in red count from the game's low
+        # a mid-game RE-RACK is a clear rise in red count from the game's low
         # point (reds only fall as they are potted; a rise means all balls were
         # brought back — e.g. a player conceded and a new game was set up).
+        # A re-rack needs the current count to be a rack (>= rack_red_threshold)
+        # AND the floor to be well below it (by >= rerack_jump) — the gap is the
+        # buffer that stops a normal detection wobble (miss a ball, then re-find
+        # it) from looking like a re-rack.
         self.rerack_jump = rerack_jump
+        # only lower the floor after this many CONSECUTIVE lower reads, so a
+        # brief run of missed-ball frames can't drag the floor down.
+        self.floor_confirm_ticks = floor_confirm_ticks
         self._red_floor: Optional[int] = None
         self._rerack_streak = 0
-        self._floor_low_streak = 0    # confirm a lower red before lowering floor
+        self._floor_low_streak = 0
         self.min_game_sec = min_game_sec        # ignore end signals before this
         self.max_game_sec = max_game_sec        # force-end after this
         self.state = SEARCH
@@ -97,7 +104,7 @@ class SnookerGameTracker:
                 self._red_floor = red_count
             elif red_count < self._red_floor:
                 self._floor_low_streak += 1
-                if self._floor_low_streak >= 2:
+                if self._floor_low_streak >= self.floor_confirm_ticks:
                     self._red_floor = red_count
                     self._floor_low_streak = 0
             else:

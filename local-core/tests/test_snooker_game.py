@@ -130,6 +130,34 @@ def test_normal_potting_is_not_a_rerack():
     assert tr.state == IN_GAME
 
 
+def test_missed_ball_wobble_is_not_a_rerack():
+    """Your concern: a frame misses a few balls (low red), the next frame
+    re-detects them (higher red). This wobble must NOT look like a re-rack."""
+    tr = SnookerGameTracker(confirm_ticks=2, rack_red_threshold=8, rerack_jump=6,
+                            floor_confirm_ticks=2)
+    start_a_game(tr)                                   # ~15 reds
+    seq = [(30, 10), (40, 10),
+           (50, 4), (60, 10),                          # single-frame miss to 4
+           (70, 10), (80, 5), (90, 5), (100, 10)]      # two-frame miss to 5, recover
+    for t, r in seq:
+        assert tr.update(ts(t), r, True, False, False) == [], f"false event at red={r}"
+    assert tr.game_number == 1                         # still one game
+
+
+def test_clear_low_to_full_rack_is_a_rerack():
+    """A genuine end→re-rack (reds fall to ~2, then a full rack returns) IS a
+    new game — the low/high separation is clear."""
+    tr = SnookerGameTracker(confirm_ticks=2, rack_red_threshold=8, rerack_jump=6,
+                            restart_confirm_ticks=2)
+    start_a_game(tr)
+    for t, r in [(30, 10), (40, 6), (50, 3), (60, 2)]:  # play down to ~2 reds
+        tr.update(ts(t), r, True, False, False)
+    tr.update(ts(70), 13, True, False, False)           # full rack back
+    ev = tr.update(ts(80), 13, True, False, False)
+    assert [e.kind for e in ev] == ["game_end", "game_start"]
+    assert tr.game_number == 2
+
+
 def test_full_rack_starts_game_without_game_start_class():
     """When the model never fires game_start, a confirmed full rack of reds
     still starts a game (the camera1.mp4 case: game_start=0 but 16 reds)."""
