@@ -18,6 +18,13 @@ dev = [
     "pytest>=8.0",
     "httpx>=0.27",
 ]
+# Heavy perception stack — only needed to run the real YOLO/OpenCV pipeline,
+# not for tests (which use fakes). Install with: pip install -e ".[perception]"
+perception = [
+    "ultralytics>=8.3",
+    "opencv-python>=4.9",
+    "numpy>=1.26",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

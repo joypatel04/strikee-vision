@@ -52,11 +52,13 @@ class Repository:
     def create(self, cur: sqlite3.Cursor, data: dict) -> dict:
         rec_id = new_id()
         ts = now_iso()
-        cols = self.spec.columns
+        # Only insert columns the caller actually provided, so omitted columns
+        # fall back to their DB defaults (e.g. timezone, role, conf_threshold).
+        cols = [c for c in self.spec.columns if c in data]
         placeholders = ", ".join(["?"] * (len(cols) + 3))
         col_names = ", ".join(["id", *cols, "created_at", "updated_at"])
         values = [rec_id]
-        values += [self._encode(c, data.get(c)) for c in cols]
+        values += [self._encode(c, data[c]) for c in cols]
         values += [ts, ts]
         cur.execute(
             f"INSERT INTO {self.spec.table} ({col_names}) VALUES ({placeholders})",

@@ -6,57 +6,144 @@
   <title>Strikee Vision — Local Core</title>
   <style>
     :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
     body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0;
            background: #0f1216; color: #e6e9ef; }
-    header { padding: 16px 24px; border-bottom: 1px solid #232833;
-             display: flex; align-items: center; gap: 12px; }
-    header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-    .dot { width: 10px; height: 10px; border-radius: 50%; background: #f0b429; }
+    header { padding: 14px 24px; border-bottom: 1px solid #232833;
+             display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #f0b429; }
     .dot.ok { background: #22c55e; }
-    main { padding: 24px; max-width: 900px; }
-    .card { background: #161b22; border: 1px solid #232833; border-radius: 10px;
-            padding: 16px 18px; margin-bottom: 16px; }
+    .spacer { flex: 1; }
+    select, button { background: #161b22; color: #e6e9ef; border: 1px solid #2b3240;
+             border-radius: 7px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+    button:hover { border-color: #3b4658; }
+    main { padding: 22px; }
     .muted { color: #8b93a1; font-size: 13px; }
-    code { background: #0f1216; padding: 1px 6px; border-radius: 4px; }
-    ul { margin: 8px 0 0; padding-left: 18px; line-height: 1.7; }
+    .grid { display: grid; gap: 12px; margin-top: 16px;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+    .asset { background: #161b22; border: 1px solid #232833; border-left-width: 4px;
+             border-radius: 10px; padding: 14px 16px; }
+    .asset .name { font-weight: 600; font-size: 14px; }
+    .asset .label { font-size: 13px; margin-top: 6px; }
+    .asset .meta { font-size: 11px; color: #8b93a1; margin-top: 8px; }
+    .s-available { border-left-color: #22c55e; }
+    .s-occupied  { border-left-color: #ef4444; }
+    .s-active    { border-left-color: #ef4444; }
+    .s-idle      { border-left-color: #f0b429; }
+    .s-degraded  { border-left-color: #f97316; }
+    .s-unknown   { border-left-color: #6b7280; }
+    .statusbar { display: flex; align-items: center; gap: 14px; font-size: 12px;
+                 color: #8b93a1; margin-top: 4px; flex-wrap: wrap; }
   </style>
 </head>
 <body>
   <header>
-    <span class="dot" id="statusDot"></span>
+    <span class="dot" id="dot"></span>
     <h1>Strikee Vision — Local Core</h1>
     <span class="muted" id="version"></span>
+    <div class="spacer"></div>
+    <select id="venueSelect"></select>
+    <button id="startBtn">Start pipeline</button>
+    <button id="stopBtn">Stop</button>
   </header>
   <main>
-    <div class="card">
-      <strong>Status</strong>
-      <div class="muted" id="statusText">checking…</div>
-    </div>
-    <div class="card">
-      <strong>Configuration API</strong>
-      <div class="muted">CRUD endpoints available under <code>/api/…</code>. Full API docs at <code>/docs</code>.</div>
-      <ul id="entities"></ul>
-    </div>
-    <div class="card muted">
-      M1 skeleton. Live asset grid, events, and sessions arrive in M2–M3.
-    </div>
+    <div class="statusbar" id="statusbar"></div>
+    <div class="grid" id="grid"></div>
+    <div class="muted" id="empty" style="margin-top:16px"></div>
   </main>
+
   <script>
-    async function load() {
-      try {
-        const res = await fetch('/health');
-        const h = await res.json();
-        document.getElementById('statusDot').classList.add('ok');
-        document.getElementById('statusText').textContent =
-          `${h.status} · db: ${h.db}`;
-        document.getElementById('version').textContent = 'v' + h.version;
-        const ul = document.getElementById('entities');
-        ul.innerHTML = h.entities.map(e => `<li><code>/api/${e}</code></li>`).join('');
-      } catch (e) {
-        document.getElementById('statusText').textContent = 'Local Core unreachable';
-      }
+    let ws = null, currentVenue = null, assets = {};
+
+    const labelClass = (label) => {
+      if (label === 'Available') return 's-available';
+      if (label === 'Active (In Use)') return 's-active';
+      if (label === 'Occupied – Idle') return 's-idle';
+      if (label === 'Occupied') return 's-occupied';
+      if (label === 'Degraded') return 's-degraded';
+      return 's-unknown';
+    };
+
+    function renderGrid() {
+      const grid = document.getElementById('grid');
+      const list = Object.values(assets);
+      document.getElementById('empty').textContent =
+        list.length ? '' : 'No assets configured for this venue yet.';
+      grid.innerHTML = list.map(a => `
+        <div class="asset ${labelClass(a.label)}">
+          <div class="name">${a.name}</div>
+          <div class="label">${a.label || 'Unknown'}</div>
+          <div class="meta">presence: ${a.presence||'-'} · activity: ${a.activity||'-'}
+               · health: ${a.health||'-'}${a.confidence!=null?` · conf ${a.confidence}`:''}</div>
+        </div>`).join('');
     }
-    load();
+
+    async function loadAssets(venueId) {
+      assets = {};
+      const res = await fetch(`/api/assets?venue_id=${venueId}`);
+      for (const a of await res.json()) {
+        assets[a.id] = { asset_id: a.id, name: a.name, label: 'Unknown' };
+      }
+      renderGrid();
+    }
+
+    function applySnapshot(list) {
+      for (const s of list) {
+        assets[s.asset_id] = { ...assets[s.asset_id], ...s };
+      }
+      renderGrid();
+    }
+
+    function connectWs(venueId) {
+      if (ws) { ws.close(); ws = null; }
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/ws/venues/${venueId}`);
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'state') applySnapshot(msg.assets);
+      };
+    }
+
+    async function refreshStatus() {
+      if (!currentVenue) return;
+      const s = await (await fetch(`/api/venues/${currentVenue}/pipeline/status`)).json();
+      document.getElementById('statusbar').textContent =
+        `pipeline: ${s.running ? 'running' : 'stopped'} · assets ${s.assets} · sources ${s.sources} · every ${s.interval_sec}s`;
+    }
+
+    async function selectVenue(venueId) {
+      currentVenue = venueId;
+      await loadAssets(venueId);
+      connectWs(venueId);
+      refreshStatus();
+    }
+
+    async function init() {
+      const h = await (await fetch('/health')).json();
+      document.getElementById('dot').classList.add('ok');
+      document.getElementById('version').textContent = 'v' + h.version;
+
+      const venues = await (await fetch('/api/venues')).json();
+      const sel = document.getElementById('venueSelect');
+      sel.innerHTML = venues.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+      sel.onchange = () => selectVenue(sel.value);
+
+      document.getElementById('startBtn').onclick = async () => {
+        await fetch(`/api/venues/${currentVenue}/pipeline/start`, { method: 'POST' });
+        refreshStatus();
+      };
+      document.getElementById('stopBtn').onclick = async () => {
+        await fetch(`/api/venues/${currentVenue}/pipeline/stop`, { method: 'POST' });
+        refreshStatus();
+      };
+
+      if (venues.length) selectVenue(venues[0].id);
+      else document.getElementById('empty').textContent =
+        'No venues yet. Create one via POST /api/venues (see /docs).';
+      setInterval(refreshStatus, 5000);
+    }
+    init();
   </script>
 </body>
 </html>
