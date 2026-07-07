@@ -51,13 +51,24 @@ class RuntimeManager:
             "interval_sec": self._interval,
         }
 
+    def _venue_sensor_kinds(self, venue_id: str) -> set:
+        with self._db.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT s.type FROM sensors s JOIN assets a "
+                "ON s.asset_id = a.id WHERE a.venue_id = ? AND s.enabled = 1",
+                (venue_id,),
+            )
+            return {r[0] for r in cur.fetchall()}
+
     async def start(self, venue_id: str) -> dict:
-        """Build and run the real YOLO/OpenCV pipeline for a venue."""
+        """Build and run the real detection pipeline for a venue. Loads only the
+        models the venue's sensors need (person and/or snooker)."""
         if self.is_running(venue_id):
             return self.status(venue_id)
         try:
             from .capture import OpenCVFrameSource
-            from .perception import YOLODetector
+            from .observe import PERSON_KINDS, SNOOKER_KIND
+            from .perception import SnookerDetector, YOLODetector
         except Exception as exc:  # pragma: no cover - import guard
             raise PerceptionUnavailable(
                 "Perception extra not installed. Run: pip install -e '.[perception]'"
@@ -75,13 +86,18 @@ class RuntimeManager:
             activity_still_ticks=int(os.environ.get("STRIKEE_STILL_TICKS", "3")),
         )
         motion = float(os.environ.get("STRIKEE_MOTION_THRESHOLD", "8.0"))
+        person_model = os.environ.get("STRIKEE_PERSON_MODEL", self._model)
+        snooker_model = os.environ.get("STRIKEE_SNOOKER_MODEL", "best.pt")
+        kinds = self._venue_sensor_kinds(venue_id)
 
         def _build():
-            detector = YOLODetector(self._model)
+            person = YOLODetector(person_model) if (kinds & PERSON_KINDS) else None
+            snooker = SnookerDetector(snooker_model) if (SNOOKER_KIND in kinds) else None
             return build_live_runtime(
-                self._db, venue_id, detector,
+                self._db, venue_id, person,
                 source_factory=lambda s: OpenCVFrameSource(s.id, s.uri),
                 engine=engine, sink=sink, sampler=sampler, motion_threshold=motion,
+                snooker_detector=snooker,
             )
 
         rt = await asyncio.to_thread(_build)

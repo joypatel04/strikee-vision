@@ -78,7 +78,8 @@ class StateEngine:
         st = self._states.setdefault(asset.id, _AssetState())
         prev_label = st.label
 
-        occ_sensors = [s for s in asset.sensors if s.kind in ("occupancy", "presence")]
+        occ_sensors = [s for s in asset.sensors
+                       if s.kind in ("occupancy", "presence", "snooker_game")]
 
         # --- health facet: from the sources backing this asset's sensors ---
         st.health = self._derive_health(occ_sensors, source_ok)

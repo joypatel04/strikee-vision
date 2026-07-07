@@ -27,9 +27,12 @@ ROLE_SUPPORTING = "supporting"
 
 @dataclass
 class Detection:
-    """One detected person: bounding box (x1,y1,x2,y2) + confidence."""
+    """One detected object: bounding box (x1,y1,x2,y2) + confidence + label.
+    label defaults to 'person' for backward compatibility with the person path;
+    the snooker detector sets labels like 'red_ball', 'game_start', etc."""
     bbox: tuple[float, float, float, float]
     confidence: float
+    label: str = "person"
 
 
 @dataclass

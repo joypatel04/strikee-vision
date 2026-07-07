@@ -115,7 +115,7 @@ def draw_zones(frame) -> list[dict]:
 
 
 def write_config(db_path, source, venue_name, source_name, bu_name,
-                 asset_type_name, zones) -> str:
+                 asset_type_name, zones, mode="snooker_game") -> str:
     repos = {s.name: Repository(s) for s in REGISTRY}
     db = Database(db_path)
     with db.cursor() as cur:
@@ -137,7 +137,7 @@ def write_config(db_path, source, venue_name, source_name, bu_name,
                                               "polygons": [z["polygon"]]})
             repos["sensor"].create(cur, {
                 "asset_id": asset["id"], "video_source_id": src["id"],
-                "zone_id": zone["id"], "type": "occupancy", "role": "primary"})
+                "zone_id": zone["id"], "type": mode, "role": "primary"})
     db.close()
     return venue["id"]
 
@@ -149,6 +149,9 @@ def main():
     ap.add_argument("--source-name", default="Camera 1")
     ap.add_argument("--business-unit", default="Snooker")
     ap.add_argument("--asset-type", default="Snooker Table")
+    ap.add_argument("--mode", default="snooker_game",
+                    choices=["snooker_game", "occupancy"],
+                    help="sensor mode: snooker_game (balls, for tables) or occupancy (people)")
     ap.add_argument("--db", default=os.environ.get("STRIKEE_DB", "strikee.db"))
     args = ap.parse_args()
 
@@ -156,13 +159,16 @@ def main():
     frame = grab_frame(args.source)
     h, w = frame.shape[:2]
     print(f"Got a {w}x{h} frame. Opening the zone editor...")
+    if args.mode == "snooker_game":
+        print("Mode: snooker_game — draw the zone around the TABLE surface "
+              "(where the balls are).")
 
     zones = draw_zones(frame)
     if not zones:
         print("No zones drawn — nothing written."); return
 
     venue_id = write_config(args.db, args.source, args.venue, args.source_name,
-                            args.business_unit, args.asset_type, zones)
+                            args.business_unit, args.asset_type, zones, mode=args.mode)
     print(f"\nConfigured venue '{args.venue}' with {len(zones)} asset(s) in {args.db}")
     print(f"venue id: {venue_id}")
     print("\nNext: run  strikee-core  (or: python run_desktop.py), pick the venue,")

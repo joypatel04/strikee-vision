@@ -13,6 +13,13 @@ def ground_point(bbox: tuple[float, float, float, float]) -> tuple[float, float]
     return ((x1 + x2) / 2.0, y2)
 
 
+def center_point(bbox: tuple[float, float, float, float]) -> tuple[float, float]:
+    """The box centre — used for objects that sit on the surface (e.g. balls),
+    where the whole object, not the feet, indicates the location."""
+    x1, y1, x2, y2 = bbox
+    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+
 def point_in_polygon(point: tuple[float, float], polygon: list) -> bool:
     """Ray-casting point-in-polygon test. `polygon` is a list of [x, y].
     Points on the boundary are treated as inside."""
@@ -49,6 +56,12 @@ def _on_segment(px, py, ax, ay, bx, by) -> bool:
 
 
 def detection_in_any_polygon(det: Detection, polygons: list) -> bool:
-    """True if the detection's ground point falls inside any of the polygons."""
+    """True if the detection's ground point (feet) falls inside any polygon."""
     gp = ground_point(det.bbox)
     return any(point_in_polygon(gp, poly) for poly in polygons)
+
+
+def detection_center_in_any_polygon(det: Detection, polygons: list) -> bool:
+    """True if the detection's centre falls inside any polygon (for balls)."""
+    cp = center_point(det.bbox)
+    return any(point_in_polygon(cp, poly) for poly in polygons)

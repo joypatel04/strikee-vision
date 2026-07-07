@@ -5,10 +5,25 @@ Everything runs on the MacBook. The Windows PC is not needed for this test.
 ## Done already (tonight, on wifi)
 
 - ✅ Perception stack installed into `local-core/.venv` (torch, YOLO, OpenCV).
-- ✅ YOLO model (`yolo11n.pt`) downloaded and cached in `local-core/`.
-- ✅ Full pipeline verified end-to-end with real YOLO.
+- ✅ Your custom snooker model (`best.pt`) is in `local-core/` and wired in.
+- ✅ **Game-tracking mode** verified end-to-end on your real footage: it detects
+  balls on the table (`best.pt` + lighting normalization), tracks a **game in
+  progress**, and opens/closes a **session per game** (18 balls → game on;
+  cleared table → game over).
 
 So at the club you need **no internet** — only the camera.
+
+## What it tracks (snooker game mode)
+
+A table is **in use / game in progress** when balls are on it. A **session = a
+game**: it starts when a rack/balls appear and ends when the table clears (for a
+sustained window). "Active" vs "Idle" comes from motion (a shot vs a pause). This
+is robust to the model missing balls in some frames — persistence + the second
+camera keep the game detected.
+
+> ⚠️ **Most important lesson from testing:** ball detection needs a
+> **good-quality stream**. Heavy compression destroys the small balls. Use the
+> camera's **main/high-res RTSP stream**, not a compressed sub-stream.
 
 > Run everything from the `local-core/` directory so the setup script and the
 > app share the same database (`strikee.db`).
@@ -35,11 +50,12 @@ python -c "import torch, cv2, ultralytics; print('ok')"
 python field_setup.py --source "rtsp://USER:PASS@CAM_IP:554/stream1" --venue "Strikee Club"
 ```
 
-- It grabs a frame and opens a window. **Click** the corners of each table's play
-  area (where players stand/lean, not just the cloth), press **`n`** to name it,
-  repeat for each table, then **`s`** to save.
+- Defaults to **snooker game mode**. It grabs a frame and opens a window. **Click
+  the corners of the TABLE surface** (the green, where the balls are — *not* where
+  people stand), press **`n`** to name it, repeat per table, then **`s`** to save.
 - It writes the full venue config to `strikee.db`.
-- Tip: try one or two tables first to validate, then add the rest.
+- Tip: try one table first to validate, then add the rest.
+- For a people-watching camera instead (passage/reception), add `--mode occupancy`.
 
 If the stream won't open, the script tells you — double-check the URL, the
 password, and that the MacBook is on the same network as the camera.
@@ -83,12 +99,16 @@ That comparison is the go/no-go answer on camera angle + detection quality.
 
 | Symptom | Knob | Try |
 |---|---|---|
-| Misses people / too many Unknown | sensor confidence | lower it: `PATCH /api/sensors/{id}` `{"conf_threshold": 0.25}` via `/docs` |
-| Flips busy/free too fast | `STRIKEE_ENTER_TICKS` / `STRIKEE_EXIT_TICKS` | raise (e.g. 3 / 4) |
-| Shows "Active" when still / never idle | `STRIKEE_MOTION_THRESHOLD`, `STRIKEE_STILL_TICKS` | raise threshold (12–20), raise still ticks (4–6) |
+| Balls not detected / table shows Available during a game | **stream quality** | use the **main/high-res** RTSP stream, not a sub-stream |
+| Misses some balls | sensor confidence | lower it: `PATCH /api/sensors/{id}` `{"conf_threshold": 0.15}` via `/docs` |
+| Needs fewer balls to count as a game | sensor `params.min_balls` | set `{"params": {"min_balls": 2}}` |
+| Game ends during a long player pause | `STRIKEE_EXIT_TICKS` | raise it (e.g. 8–12 = longer "still a game" window) |
+| Game flickers on/off | `STRIKEE_ENTER_TICKS` / `STRIKEE_EXIT_TICKS` | raise (e.g. 3 / 6) |
+| "Active" vs "Idle" wrong | `STRIKEE_MOTION_THRESHOLD`, `STRIKEE_STILL_TICKS` | tune threshold / still ticks |
 | Sampling too slow/fast | `STRIKEE_TICK_SEC` | 5–10 |
+| Use a different snooker model | `STRIKEE_SNOOKER_MODEL` | path to a `.pt` |
 
-Example: `STRIKEE_MOTION_THRESHOLD=15 STRIKEE_EXIT_TICKS=4 strikee-core`
+Example: `STRIKEE_EXIT_TICKS=10 STRIKEE_TICK_SEC=6 strikee-core`
 
 To re-draw zones or add tables, re-run `field_setup.py` (it creates a fresh
 venue; pick the newest one in the dashboard).
@@ -99,7 +119,10 @@ venue; pick the newest one in the dashboard).
   If VLC can't play it, the app can't either.
 - **Everything Unknown/grey** — the camera feed isn't being read (offline). Check
   the URL/network; the pipeline retries automatically when it recovers.
-- **No detections at all** — the zone may not cover where people actually stand,
-  or the angle is too steep. Re-draw the zone lower/wider.
+- **No ball detections** — first suspect **stream quality** (use the main stream).
+  Then check the zone actually covers the table surface, and lower the sensor
+  confidence to 0.15.
+- **No detections at all (people mode)** — the zone may not cover where people
+  actually stand, or the angle is too steep. Re-draw the zone lower/wider.
 - **Window doesn't appear** — the launcher falls back to the browser; open the
   printed `http://127.0.0.1:8760/` URL.

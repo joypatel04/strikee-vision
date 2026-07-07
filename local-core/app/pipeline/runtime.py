@@ -10,7 +10,7 @@ from typing import Callable, Optional
 
 import math
 
-from .geometry import detection_in_any_polygon, ground_point
+from .observe import observe, PERSON_KINDS, SNOOKER_KIND
 from .perception import Detector
 from .sink import ChangeEvent, StateSink
 from .state import StateEngine
@@ -109,12 +109,14 @@ class LiveRuntime:
         sampler=None,
         clock=_now,
         motion_threshold: float = 8.0,
+        snooker_detector: Optional[Detector] = None,
     ):
         self.venue_id = venue_id
         self.assets = assets
         self.sources = sources
         self.frame_sources = frame_sources
-        self.detector = detector
+        self.detector = detector                 # person / general detector
+        self.snooker_detector = snooker_detector  # best.pt (optional)
         self.engine = engine or StateEngine()
         self.sink = sink
         self.sampler = sampler
@@ -129,34 +131,38 @@ class LiveRuntime:
     def tick(self) -> tuple[list[AssetSnapshot], list[AssetSnapshot]]:
         """One pipeline tick. Returns (all_snapshots, changed_snapshots)."""
         source_ok: dict[str, bool] = {}
-        detections: dict[str, list] = {}
+        # per source: {"person": [...], "snooker": [...]}
+        dets_by_source: dict[str, dict] = {}
 
         for src in self.sources:
+            kinds = {s.kind for s in src.sensors}
             fs = self.frame_sources.get(src.id)
-            if fs is None:
-                source_ok[src.id] = False
-                detections[src.id] = []
-                continue
-            ok, frame = fs.read()
+            person, snooker = [], []
+            ok = False
+            if fs is not None:
+                ok, frame = fs.read()
+                if ok:
+                    if kinds & PERSON_KINDS and self.detector is not None:
+                        person = self.detector.detect(frame)
+                    if SNOOKER_KIND in kinds and self.snooker_detector is not None:
+                        snooker = self.snooker_detector.detect(frame)
             source_ok[src.id] = ok
-            detections[src.id] = self.detector.detect_persons(frame) if ok else []
+            dets_by_source[src.id] = {"person": person, "snooker": snooker}
 
-        # raw per-sensor observations (person-in-zone)
+        # raw per-sensor observations via the per-kind observation strategy
         raw_by_sensor: dict[str, RawObservation] = {}
         for src in self.sources:
-            dets = detections.get(src.id, [])
+            bucket = dets_by_source.get(src.id, {"person": [], "snooker": []})
             for sensor in src.sensors:
-                in_zone = [d for d in dets
-                           if d.confidence >= sensor.conf_threshold
-                           and detection_in_any_polygon(d, sensor.zone_polygons)]
-                present = len(in_zone) > 0
-                conf = max((d.confidence for d in in_zone), default=0.0)
-                cur_points = [ground_point(d.bbox) for d in in_zone]
-                active = _motion(self._prev_points.get(sensor.id), cur_points,
+                dets = bucket["snooker"] if sensor.kind == SNOOKER_KIND else bucket["person"]
+                obs = observe(sensor.kind, dets, sensor)
+                points = obs["points"]
+                active = _motion(self._prev_points.get(sensor.id), points,
                                  self.motion_threshold)
-                self._prev_points[sensor.id] = cur_points
+                self._prev_points[sensor.id] = points
                 raw_by_sensor[sensor.id] = RawObservation(
-                    present=present, confidence=conf, count=len(in_zone), active=active)
+                    present=obs["present"], confidence=obs["confidence"],
+                    count=obs["count"], active=active)
 
         all_snaps: list[AssetSnapshot] = []
         changed: list[AssetSnapshot] = []
@@ -186,7 +192,7 @@ class LiveRuntime:
         for asset in self.assets:
             best = 0
             for s in asset.sensors:
-                if s.kind in ("occupancy", "presence"):
+                if s.kind in ("occupancy", "presence", "snooker_game"):
                     obs = raw_by_sensor.get(s.id)
                     if obs:
                         best = max(best, obs.count)
@@ -218,6 +224,7 @@ def build_live_runtime(
     sink: Optional[StateSink] = None,
     sampler=None,
     motion_threshold: float = 8.0,
+    snooker_detector: Optional[Detector] = None,
 ) -> LiveRuntime:
     assets, sources = load_venue_config(db, venue_id)
     frame_sources = {}
@@ -225,4 +232,5 @@ def build_live_runtime(
         if src.uri:
             frame_sources[src.id] = source_factory(src)
     return LiveRuntime(venue_id, assets, sources, frame_sources, detector,
-                       engine, sink, sampler, motion_threshold=motion_threshold)
+                       engine, sink, sampler, motion_threshold=motion_threshold,
+                       snooker_detector=snooker_detector)
