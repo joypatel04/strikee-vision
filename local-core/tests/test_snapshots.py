@@ -79,22 +79,28 @@ def test_sink_no_snapshot_without_frame():
     db.close()
 
 
-def test_games_report_endpoint(client):
-    """The games report lists game_start events (new games) with snapshots."""
+def test_games_report_pairs_start_and_end(client):
+    """The games report pairs game_start -> game_end into games with duration."""
     db = client.app.state.db
     es = EventStore(db)
+    # game 1: 14:00 -> 14:30 (1800s), with a snapshot
     es.append({"venue_id": "v1", "asset_id": "a1", "business_unit_id": "snooker",
                "type": "game_start", "ts": "2026-07-08T14:00:00+00:00",
                "snapshot": "v1/2026-07-08/Table_1_140000.jpg"})
     es.append({"venue_id": "v1", "asset_id": "a1", "business_unit_id": "snooker",
+               "type": "game_end", "ts": "2026-07-08T14:30:00+00:00"})
+    # game 2: 15:30, still open
+    es.append({"venue_id": "v1", "asset_id": "a1", "business_unit_id": "snooker",
                "type": "game_start", "ts": "2026-07-08T15:30:00+00:00",
                "snapshot": "v1/2026-07-08/Table_1_153000.jpg"})
-    # a non-game event should be ignored
     es.append({"venue_id": "v1", "asset_id": "a1", "type": "state_change",
-               "ts": "2026-07-08T14:10:00+00:00"})
+               "ts": "2026-07-08T14:10:00+00:00"})   # ignored
 
     body = client.get("/api/venues/v1/games?date=2026-07-08").json()
-    assert body["count"] == 2                       # two games that day
-    g = body["games"][0]
-    assert g["snapshot"].startswith("/snapshots/v1/2026-07-08/")
+    assert body["count"] == 2
+    finished = [g for g in body["games"] if g["end_ts"]]
+    assert finished and finished[0]["duration_sec"] == 1800
+    assert finished[0]["snapshot"].startswith("/snapshots/v1/2026-07-08/")
+    open_games = [g for g in body["games"] if g["end_ts"] is None]
+    assert len(open_games) == 1
     assert client.get("/api/venues/v1/games?date=2026-07-09").json()["count"] == 0

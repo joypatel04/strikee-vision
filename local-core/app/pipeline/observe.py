@@ -20,6 +20,8 @@ BALL_LABELS = {
     "red_ball", "black_ball", "blue_ball", "brown_ball",
     "green_ball", "white_ball", "yellow_ball",
 }
+# non-red, non-cue colours — their presence with few reds signals the end phase
+COLORED_LABELS = {"black_ball", "blue_ball", "brown_ball", "green_ball", "yellow_ball"}
 
 
 def observe_person(detections: list[Detection], sensor) -> dict:
@@ -48,6 +50,8 @@ def observe_snooker_game(detections: list[Detection], sensor) -> dict:
              if d.label in BALL_LABELS
              and d.confidence >= sensor.conf_threshold
              and detection_center_in_any_polygon(d, sensor.zone_polygons)]
+    red_count = sum(1 for d in balls if d.label == "red_ball")
+    colored_present = any(d.label in COLORED_LABELS for d in balls)
     game_start = any(d.label == "game_start"
                      and detection_center_in_any_polygon(d, sensor.zone_polygons)
                      for d in detections)
@@ -61,6 +65,8 @@ def observe_snooker_game(detections: list[Detection], sensor) -> dict:
         "points": [_center(d) for d in balls],
         "game_start": game_start,
         "player": player,
+        "red_count": red_count,
+        "colored_present": colored_present,
     }
 
 

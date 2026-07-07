@@ -14,6 +14,25 @@ from .store import (
 )
 
 
+def _game(start_evt: dict, end_evt: Optional[dict], names: dict) -> dict:
+    from datetime import datetime
+    start_ts = start_evt["ts"]
+    end_ts = end_evt["ts"] if end_evt else None
+    duration = None
+    if end_ts:
+        duration = int((datetime.fromisoformat(end_ts)
+                        - datetime.fromisoformat(start_ts)).total_seconds())
+    snap = start_evt.get("snapshot")
+    return {
+        "table": names.get(start_evt["asset_id"], start_evt["asset_id"]),
+        "business_unit_id": start_evt["business_unit_id"],
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "duration_sec": duration,
+        "snapshot": f"/snapshots/{snap}" if snap else None,
+    }
+
+
 class CorrectBody(BaseModel):
     start_ts: Optional[str] = None
     end_ts: Optional[str] = None
@@ -132,23 +151,32 @@ def build_runtime_router() -> APIRouter:
     @router.get("/api/venues/{venue_id}/games")
     def games_report(venue_id: str, date: Optional[str] = None,
                      db: Database = Depends(get_db)):
-        """Daily games log for staff reconciliation: each new game (a detected
-        rack / game_start) with its time, table, and evidence snapshot. `date`
-        filters to YYYY-MM-DD; omit for the most recent games."""
-        rows = [e for e in EventStore(db).list(venue_id, limit=2000)
-                if e["type"] == "game_start"]
-        if date:
-            rows = [e for e in rows if (e["ts"] or "").startswith(date)]
+        """Daily games log for staff reconciliation: each game (game_start ->
+        game_end from the state machine) with start/end time, duration, table,
+        and an evidence snapshot. `date` filters to YYYY-MM-DD."""
+        evts = [e for e in EventStore(db).list(venue_id, limit=5000)
+                if e["type"] in ("game_start", "game_end")]
+        evts.sort(key=lambda e: (e["asset_id"] or "", e["ts"] or ""))
         with db.cursor() as cur:
             cur.execute("SELECT id, name FROM assets WHERE venue_id = ?", (venue_id,))
             names = {r["id"]: r["name"] for r in cur.fetchall()}
-        games = [{
-            "event_id": e["id"],
-            "table": names.get(e["asset_id"], e["asset_id"]),
-            "business_unit_id": e["business_unit_id"],
-            "ts": e["ts"],
-            "snapshot": f"/snapshots/{e['snapshot']}" if e.get("snapshot") else None,
-        } for e in rows]
+
+        # pair each game_start with the next game_end for the same table
+        games = []
+        open_by_asset: dict = {}
+        for e in evts:
+            a = e["asset_id"]
+            if e["type"] == "game_start":
+                open_by_asset[a] = e
+            elif e["type"] == "game_end" and a in open_by_asset:
+                s = open_by_asset.pop(a)
+                games.append(_game(s, e, names))
+        for a, s in open_by_asset.items():        # still-open games
+            games.append(_game(s, None, names))
+
+        if date:
+            games = [g for g in games if (g["start_ts"] or "").startswith(date)]
+        games.sort(key=lambda g: g["start_ts"] or "", reverse=True)
         return {"date": date, "count": len(games), "games": games}
 
     @router.get("/api/venues/{venue_id}/review-queue")

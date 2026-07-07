@@ -20,10 +20,15 @@ So at the club you need **no internet** — only the camera.
   **not** count as in use — after a short no-play window the table reads
   **Available** (players leave balls/lights between games). "Active" = a shot
   happening; "Occupied – Idle" = a brief pause mid-game.
-- **A new game = a `game_start` (rack) detection** from your trained model. Each
-  one is logged with a **snapshot + timestamp** in the games log — this is what
-  you count and reconcile against staff. It does not depend on catching every
-  ball; the rack itself is the trigger.
+- **Games are counted by a state machine** (ported from your deployed snooker-ai
+  logic): a game starts on a **`game_start` (rack) detection OR a confirmed full
+  rack of reds** (so it still counts when the model misses the rack — verified on
+  your `test_videos`, where `game_start` never fired but games were detected). A
+  **lingering rack is not double-counted** (while a game is running, new rack
+  detections are ignored). A game **ends** from the red-ball trajectory (reds
+  clear to colours, then to none), then it waits for a player before the next
+  game. Each game is logged with a **snapshot + start/end time + duration** for
+  staff reconciliation.
 
 > ⚠️ **Most important lesson from testing:** ball detection needs a
 > **good-quality stream**. Heavy compression destroys the small balls. Use the
@@ -131,7 +136,10 @@ best-effort upload each snapshot to S3.
 | Needs fewer balls to count as a game | sensor `params.min_balls` | set `{"params": {"min_balls": 2}}` |
 | Table goes Available during a long player pause | `STRIKEE_EXIT_TICKS` | raise it — this is the **no-play window** before a table frees up (e.g. 8–20 ≈ 1–2 min at a 7s tick) |
 | Table stays "in use" too long after players leave | `STRIKEE_EXIT_TICKS` | lower it |
-| Missed / extra games in the log | sensor confidence / `min_balls` | tune so the rack (`game_start`) is caught reliably; use the main stream |
+| Games over/under-counted | `STRIKEE_RACK_REDS` | reds needed to treat as a new rack (default 10; raise to be stricter) |
+| Two quick frames merged into one game | `STRIKEE_MIN_GAME_MIN` | the min game window — raise to suppress spurious quick restarts (your 15-min idea) |
+| A stuck game never ends | `STRIKEE_MAX_GAME_MIN` | force-end after this many minutes (default 45) |
+| Missed racks | sensor confidence | lower `conf_threshold`; use the main stream |
 | "Active" vs "Idle" wrong | `STRIKEE_MOTION_THRESHOLD`, `STRIKEE_STILL_TICKS` | tune threshold / still ticks |
 | Sampling too slow/fast | `STRIKEE_TICK_SEC` | 5–10 |
 | Use a different snooker model | `STRIKEE_SNOOKER_MODEL` | path to a `.pt` |

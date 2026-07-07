@@ -31,10 +31,14 @@ from **Occupied – Idle**.
 **Snooker game mode:** a `snooker_game` sensor uses a custom model (`best.pt`)
 with CLAHE lighting normalization. Occupancy = **actual play (motion)**, so a
 table with balls left sitting reads **Available** (not in use); it reads in-use
-only when someone is playing. A **new game** is a `game_start` (rack) detection,
-logged with a timestamped **snapshot** for staff reconciliation
-(`GET /api/venues/{id}/games`). Robust via CLAHE + smoothing + primary/supporting
-multi-camera fusion. Person mode (`occupancy`, upgradeable to `yolo11x`) remains
+only when someone is playing. **Games are counted by a state machine** (ported
+from the deployed snooker-ai logic): a game starts on a `game_start` detection
+**or** a confirmed full rack of reds; a lingering rack is not double-counted; a
+game ends from the red-ball trajectory (reds → colours → none), then waits for a
+player. Each game is logged with a timestamped **snapshot** + duration for staff
+reconciliation (`GET /api/venues/{id}/games`; tunables `STRIKEE_RACK_REDS`,
+`STRIKEE_MIN_GAME_MIN`, `STRIKEE_MAX_GAME_MIN`). Robust via CLAHE + smoothing +
+primary/supporting multi-camera fusion. Person mode (`occupancy`, upgradeable to `yolo11x`) remains
 for people-visible cameras. Models selected per sensor `type`; override with
 `STRIKEE_SNOOKER_MODEL` / `STRIKEE_PERSON_MODEL`.
 

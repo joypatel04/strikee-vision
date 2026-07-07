@@ -91,6 +91,9 @@ class RuntimeManager:
         motion = float(os.environ.get("STRIKEE_MOTION_THRESHOLD", "8.0"))
         person_model = os.environ.get("STRIKEE_PERSON_MODEL", self._model)
         snooker_model = os.environ.get("STRIKEE_SNOOKER_MODEL", "best.pt")
+        min_game = float(os.environ.get("STRIKEE_MIN_GAME_MIN", "0")) * 60.0
+        max_game = float(os.environ.get("STRIKEE_MAX_GAME_MIN", "45")) * 60.0
+        rack_reds = int(os.environ.get("STRIKEE_RACK_REDS", "10"))
         kinds = self._venue_sensor_kinds(venue_id)
 
         def _build():
@@ -100,7 +103,8 @@ class RuntimeManager:
                 self._db, venue_id, person,
                 source_factory=lambda s: OpenCVFrameSource(s.id, s.uri),
                 engine=engine, sink=sink, sampler=sampler, motion_threshold=motion,
-                snooker_detector=snooker,
+                snooker_detector=snooker, min_game_sec=min_game, max_game_sec=max_game,
+                rack_red_threshold=rack_reds,
             )
 
         rt = await asyncio.to_thread(_build)

@@ -113,26 +113,24 @@ def test_play_motion_makes_table_in_use():
     db.close()
 
 
-def test_new_rack_emits_game_start_event():
-    """A newly detected rack -> a game_start event (the counted 'new game')."""
+def test_confirmed_rack_emits_one_game_start():
+    """A rack confirmed over consecutive ticks -> exactly one game_start event
+    (the state machine suppresses the lingering-rack re-detections)."""
     db = Database(":memory:")
     sink = DbStateSink(EventStore(db), SessionStore(db))
     sensor = _snooker_sensor()
     asset = AssetRuntime(id="a1", name="Table 1", business_unit_id="snooker",
                          sensors=[sensor])
     source = SourceRuntime(id="src1", name="Cam", uri="fake", sensors=[sensor])
-    # no rack, then a rack appears (game_start), then it persists
-    no_rack = [ball(50 + i * 8, 100) for i in range(10)]   # balls, no game_start label
-    script = [no_rack, a_rack(), a_rack(), no_rack, a_rack()]
+    # the rack lingers for many ticks (slow break) -> still ONE counted game
+    script = [a_rack()] * 8
     rt = LiveRuntime("v1", [asset], [source], {"src1": FakeFrameSource("src1")},
                      detector=None, engine=StateEngine(enter_ticks=1),
                      sink=sink, snooker_detector=FakeDetector(script))
-    for _ in range(5):
+    for _ in range(8):
         rt.tick()
     game_starts = [e for e in EventStore(db).list("v1") if e["type"] == "game_start"]
-    # two distinct racks (tick 2 and tick 5) -> two games; the persisting rack
-    # in between is not double-counted
-    assert len(game_starts) == 2
+    assert len(game_starts) == 1
     db.close()
 
 

@@ -236,7 +236,7 @@
         <div class="row">
           ${x.snapshot ? `<a href="${x.snapshot}" target="_blank"><img src="${x.snapshot}" style="height:44px;border-radius:4px;border:1px solid #2b3240"></a>` : ''}
           <span class="grow">${x.table}
-            <span class="ts">new game @ ${shortTime(x.ts)}</span>
+            <span class="ts">${shortTime(x.start_ts)}${x.end_ts ? ' → ' + shortTime(x.end_ts) : ' (in progress)'}${x.duration_sec != null ? ' · ' + dur(x.duration_sec) : ''}</span>
           </span>
         </div>`).join('')) : '<div class="muted">No games recorded today yet.</div>';
     }

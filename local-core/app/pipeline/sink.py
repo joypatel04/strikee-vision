@@ -101,15 +101,28 @@ class DbStateSink:
                         "origin": "system", "correlation_id": open_session["id"],
                     })
 
-    def record_game_start(self, venue_id: str, s: AssetSnapshot) -> None:
-        """A new rack was detected -> log a game_start event with a snapshot.
-        This is the counted 'a new game began' marker for staff reconciliation."""
+    def record_game_start(self, venue_id: str, s: AssetSnapshot,
+                          ts: str = None, game_number: int = None) -> None:
+        """A confirmed new game began -> log a game_start event with a snapshot.
+        The counted 'new game' marker for staff reconciliation."""
         snapshot = self._capture_snapshot(venue_id, s)
         self.events.append({
             "venue_id": venue_id, "asset_id": s.asset_id,
             "business_unit_id": s.business_unit_id,
-            "type": "game_start", "ts": s.effective_at,
+            "type": "game_start", "ts": ts or s.effective_at,
             "origin": "system", "snapshot": snapshot,
+            "reason": f"game {game_number}" if game_number else None,
+        })
+
+    def record_game_end(self, venue_id: str, s: AssetSnapshot,
+                        ts: str = None, game_number: int = None) -> None:
+        """A game ended (reds cleared / max window) -> log a game_end event."""
+        self.events.append({
+            "venue_id": venue_id, "asset_id": s.asset_id,
+            "business_unit_id": s.business_unit_id,
+            "type": "game_end", "ts": ts or s.effective_at,
+            "origin": "system",
+            "reason": f"game {game_number}" if game_number else None,
         })
 
     def _capture_snapshot(self, venue_id: str, s: AssetSnapshot):

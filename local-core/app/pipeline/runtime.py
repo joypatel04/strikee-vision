@@ -13,6 +13,7 @@ import math
 from .observe import observe, PERSON_KINDS, SNOOKER_KIND
 from .perception import Detector
 from .sink import ChangeEvent, StateSink
+from .snooker_game import SnookerGameTracker
 from .state import StateEngine
 from .types import (
     AssetRuntime, AssetSnapshot, RawObservation, SensorRuntime, SourceRuntime,
@@ -113,6 +114,9 @@ class LiveRuntime:
         clock=_now,
         motion_threshold: float = 8.0,
         snooker_detector: Optional[Detector] = None,
+        min_game_sec: float = 0.0,
+        max_game_sec: float = 2700.0,
+        rack_red_threshold: int = 10,
     ):
         self.venue_id = venue_id
         self.assets = assets
@@ -127,8 +131,15 @@ class LiveRuntime:
         self.motion_threshold = motion_threshold
         self._last_label: dict[str, str] = {}
         self._prev_points: dict[str, list] = {}
-        self._prev_game_start: dict[str, bool] = {}  # asset_id -> game_start last tick
         self._last_frames: dict[str, object] = {}   # source_id -> last frame
+
+        # one game state machine per asset that has a snooker sensor
+        self._game_trackers: dict[str, SnookerGameTracker] = {}
+        for asset in assets:
+            if any(s.kind == SNOOKER_KIND for s in asset.sensors):
+                self._game_trackers[asset.id] = SnookerGameTracker(
+                    min_game_sec=min_game_sec, max_game_sec=max_game_sec,
+                    rack_red_threshold=rack_red_threshold)
 
         # map each asset to its primary (or first) source, for snapshots
         self._asset_source: dict[str, str] = {}
@@ -173,11 +184,14 @@ class LiveRuntime:
 
         # raw per-sensor observations via the per-kind observation strategy
         raw_by_sensor: dict[str, RawObservation] = {}
+        snooker_obs: dict[str, dict] = {}   # sensor_id -> full obs (for the game tracker)
         for src in self.sources:
             bucket = dets_by_source.get(src.id, {"person": [], "snooker": []})
             for sensor in src.sensors:
                 dets = bucket["snooker"] if sensor.kind == SNOOKER_KIND else bucket["person"]
                 obs = observe(sensor.kind, dets, sensor)
+                if sensor.kind == SNOOKER_KIND:
+                    snooker_obs[sensor.id] = obs
                 points = obs["points"]
                 active = _motion(self._prev_points.get(sensor.id), points,
                                  self.motion_threshold)
@@ -210,15 +224,31 @@ class LiveRuntime:
         if self.sink is not None and change_events:
             self.sink.handle(self.venue_id, change_events)
 
-        # new-rack detection -> a game_start event (a new game began)
-        if self.sink is not None and hasattr(self.sink, "record_game_start"):
+        # snooker game state machine -> game_start / game_end events
+        if self.sink is not None and self._game_trackers:
             snap_by_asset = {s.asset_id: s for s in all_snaps}
+            game_ts = self._clock()
             for asset in self.assets:
-                gs = any(raw_by_sensor.get(s.id, _NO_OBS).game_start
-                         for s in asset.sensors if s.kind == SNOOKER_KIND)
-                if gs and not self._prev_game_start.get(asset.id, False):
-                    self.sink.record_game_start(self.venue_id, snap_by_asset[asset.id])
-                self._prev_game_start[asset.id] = gs
+                tracker = self._game_trackers.get(asset.id)
+                if tracker is None:
+                    continue
+                red, colored, gs, player = 0, False, False, False
+                for s in asset.sensors:
+                    o = snooker_obs.get(s.id)
+                    if not o:
+                        continue
+                    red = max(red, o.get("red_count", 0))
+                    colored = colored or o.get("colored_present", False)
+                    gs = gs or o.get("game_start", False)
+                    player = player or o.get("player", False)
+                for ev in tracker.update(game_ts, red, colored, gs, player):
+                    snap = snap_by_asset.get(asset.id)
+                    if ev.kind == "game_start" and hasattr(self.sink, "record_game_start"):
+                        self.sink.record_game_start(self.venue_id, snap, ts=ev.ts,
+                                                    game_number=ev.game_number)
+                    elif ev.kind == "game_end" and hasattr(self.sink, "record_game_end"):
+                        self.sink.record_game_end(self.venue_id, snap, ts=ev.ts,
+                                                  game_number=ev.game_number)
 
         if self.sampler is not None:
             self._sample(all_snaps, raw_by_sensor)
@@ -266,6 +296,9 @@ def build_live_runtime(
     sampler=None,
     motion_threshold: float = 8.0,
     snooker_detector: Optional[Detector] = None,
+    min_game_sec: float = 0.0,
+    max_game_sec: float = 2700.0,
+    rack_red_threshold: int = 10,
 ) -> LiveRuntime:
     assets, sources = load_venue_config(db, venue_id)
     frame_sources = {}
@@ -274,4 +307,6 @@ def build_live_runtime(
             frame_sources[src.id] = source_factory(src)
     return LiveRuntime(venue_id, assets, sources, frame_sources, detector,
                        engine, sink, sampler, motion_threshold=motion_threshold,
-                       snooker_detector=snooker_detector)
+                       snooker_detector=snooker_detector,
+                       min_game_sec=min_game_sec, max_game_sec=max_game_sec,
+                       rack_red_threshold=rack_red_threshold)
