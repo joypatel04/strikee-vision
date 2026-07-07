@@ -35,6 +35,23 @@
     .s-unknown   { border-left-color: #6b7280; }
     .statusbar { display: flex; align-items: center; gap: 14px; font-size: 12px;
                  color: #8b93a1; margin-top: 4px; flex-wrap: wrap; }
+    .panels { display: grid; gap: 16px; margin-top: 24px;
+              grid-template-columns: 1fr 1fr; }
+    @media (max-width: 800px) { .panels { grid-template-columns: 1fr; } }
+    .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+                color: #8b93a1; margin: 0 0 8px; }
+    .row { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+           border: 1px solid #232833; border-radius: 8px; margin-bottom: 6px;
+           font-size: 13px; background: #12161c; }
+    .row .grow { flex: 1; }
+    .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px;
+             border: 1px solid #2b3240; color: #b9c0cc; }
+    .b-detected { color: #f0b429; border-color: #6b551b; }
+    .b-confirmed { color: #22c55e; border-color: #245e37; }
+    .b-corrected { color: #60a5fa; border-color: #294a73; }
+    .b-voided { color: #8b93a1; text-decoration: line-through; }
+    .mini { font-size: 11px; padding: 3px 8px; }
+    .ts { color: #8b93a1; font-size: 11px; }
   </style>
 </head>
 <body>
@@ -51,6 +68,16 @@
     <div class="statusbar" id="statusbar"></div>
     <div class="grid" id="grid"></div>
     <div class="muted" id="empty" style="margin-top:16px"></div>
+    <div class="panels">
+      <div class="panel">
+        <h2>Sessions</h2>
+        <div id="sessions"></div>
+      </div>
+      <div class="panel">
+        <h2>Recent events</h2>
+        <div id="events"></div>
+      </div>
+    </div>
   </main>
 
   <script>
@@ -112,11 +139,54 @@
         `pipeline: ${s.running ? 'running' : 'stopped'} · assets ${s.assets} · sources ${s.sources} · every ${s.interval_sec}s`;
     }
 
+    const assetName = (id) => (assets[id] && assets[id].name) || id?.slice(0, 6) || '—';
+    const shortTime = (ts) => ts ? new Date(ts).toLocaleTimeString() : '—';
+    const dur = (sec) => sec == null ? 'open' :
+      (sec >= 60 ? `${Math.floor(sec/60)}m ${sec%60}s` : `${sec}s`);
+
+    async function reviewAction(id, action) {
+      await fetch(`/api/sessions/${id}/${action}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actor: 'dashboard' }),
+      });
+      loadSessions();
+    }
+    window.reviewAction = reviewAction;
+
+    async function loadSessions() {
+      if (!currentVenue) return;
+      const rows = await (await fetch(`/api/venues/${currentVenue}/sessions?limit=30`)).json();
+      document.getElementById('sessions').innerHTML = rows.length ? rows.map(s => `
+        <div class="row">
+          <span class="grow">${assetName(s.asset_id)}
+            <span class="ts">${shortTime(s.start_ts)} → ${s.end_ts ? shortTime(s.end_ts) : 'now'} · ${dur(s.duration_sec)}</span>
+          </span>
+          <span class="badge b-${s.status}">${s.status}</span>
+          ${s.status !== 'voided' ? `
+            <button class="mini" onclick="reviewAction('${s.id}','confirm')">✓</button>
+            <button class="mini" onclick="reviewAction('${s.id}','void')">✕</button>` : ''}
+        </div>`).join('') : '<div class="muted">No sessions yet.</div>';
+    }
+
+    async function loadEvents() {
+      if (!currentVenue) return;
+      const rows = await (await fetch(`/api/venues/${currentVenue}/events?limit=30`)).json();
+      document.getElementById('events').innerHTML = rows.length ? rows.map(e => `
+        <div class="row">
+          <span class="grow">${assetName(e.asset_id)}
+            <span class="ts">${e.type}${e.label ? ' · ' + e.label : ''}</span>
+          </span>
+          <span class="ts">${shortTime(e.ts)}</span>
+        </div>`).join('') : '<div class="muted">No events yet.</div>';
+    }
+
     async function selectVenue(venueId) {
       currentVenue = venueId;
       await loadAssets(venueId);
       connectWs(venueId);
       refreshStatus();
+      loadSessions();
+      loadEvents();
     }
 
     async function init() {
@@ -141,7 +211,7 @@
       if (venues.length) selectVenue(venues[0].id);
       else document.getElementById('empty').textContent =
         'No venues yet. Create one via POST /api/venues (see /docs).';
-      setInterval(refreshStatus, 5000);
+      setInterval(() => { refreshStatus(); loadSessions(); loadEvents(); }, 5000);
     }
     init();
   </script>

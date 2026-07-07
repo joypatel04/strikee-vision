@@ -8,11 +8,17 @@ architecture and milestone plan.
 chain (Organization → Venue → Business Unit / Space → Video Source → Asset Type
 → Asset → Zone → Sensor), FastAPI app, dashboard shell.
 
-**M2 (current):** live perception → state pipeline. YOLO person detection
-(pluggable) → person-in-zone → three-facet state (presence/activity/health) with
+**M2:** live perception → state pipeline. YOLO person detection (pluggable) →
+person-in-zone → three-facet state (presence/activity/health) with
 primary/supporting fusion and hysteresis smoothing → live asset grid pushed over
-WebSocket. Sampled every 5–10s. Events, sessions, and metric samples land in
-M3–M4.
+WebSocket. Sampled every 5–10s.
+
+**M3 (current):** events + sessions. State changes are persisted as append-only
+**Events**; presence transitions open/close **materialized Sessions** (grace
+window from presence smoothing). Session **review** (confirm / correct / void)
+appends immutable correction events and preserves original times. Dashboard adds
+event feed + sessions panels with confirm/void. Metric samples + analytics land
+in M4.
 
 The pipeline core (geometry, state engine, runtime) imports **no heavy
 libraries** — YOLO and OpenCV sit behind protocols and are used only when a
@@ -88,11 +94,26 @@ app/
     runtime.py     LiveRuntime tick + DB config loader
     broadcast.py   WebSocket connection manager
     manager.py     RuntimeManager: async tick loops per venue
+    sink.py        StateSink: state changes -> events + sessions
+  store.py         EventStore (append-only) + SessionStore (materialized)
+  review.py        session confirm / correct / void (+ correction events)
+  runtime_api.py   events/sessions endpoints + review actions
 web/
-  index.html       live dashboard (asset grid + WebSocket)
-tests/             pytest — config CRUD, geometry, state engine,
-                   runtime end-to-end, pipeline HTTP + WebSocket (32 tests)
+  index.html       live dashboard (asset grid + sessions + events over WebSocket)
+tests/             pytest — config CRUD, geometry, state engine, runtime
+                   end-to-end, pipeline HTTP/WS, events/sessions/review (41 tests)
 ```
+
+## Runtime API (M3)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/venues/{id}/events` | list events (`?asset_id=&limit=`) |
+| GET | `/api/venues/{id}/sessions` | list sessions (`?asset_id=&business_unit_id=&limit=`) |
+| GET | `/api/sessions/{id}` | get one session |
+| POST | `/api/sessions/{id}/confirm` | confirm a detected session |
+| POST | `/api/sessions/{id}/correct` | correct start/end (preserves originals) |
+| POST | `/api/sessions/{id}/void` | void a false session |
 
 ## Config API
 

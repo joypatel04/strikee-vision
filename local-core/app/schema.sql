@@ -110,3 +110,58 @@ CREATE INDEX IF NOT EXISTS idx_asset_types_venue ON asset_types(venue_id);
 CREATE INDEX IF NOT EXISTS idx_assets_venue      ON assets(venue_id);
 CREATE INDEX IF NOT EXISTS idx_zones_space       ON zones(space_id);
 CREATE INDEX IF NOT EXISTS idx_sensors_asset     ON sensors(asset_id);
+
+-- ── Runtime tables (M3) ────────────────────────────────────────────────
+-- Events are APPEND-ONLY: never updated or deleted. Corrections are new
+-- events. No FK to assets, so history survives asset deletion.
+CREATE TABLE IF NOT EXISTS events (
+    id                TEXT PRIMARY KEY,
+    venue_id          TEXT NOT NULL,
+    asset_id          TEXT,
+    business_unit_id  TEXT,
+    type              TEXT NOT NULL,       -- state_change | session_start | session_end
+                                           -- | session_confirmed | session_corrected
+                                           -- | session_voided | manual
+    ts                TEXT NOT NULL,       -- effective time of the fact
+    presence          TEXT,
+    activity          TEXT,
+    health            TEXT,
+    label             TEXT,
+    prev_label        TEXT,
+    confidence        REAL,
+    origin            TEXT NOT NULL DEFAULT 'system',   -- system | user
+    actor             TEXT,
+    reason            TEXT,
+    correlation_id    TEXT,                -- e.g. the session id this relates to
+    created_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_venue_ts ON events(venue_id, ts);
+CREATE INDEX IF NOT EXISTS idx_events_asset    ON events(asset_id);
+CREATE INDEX IF NOT EXISTS idx_events_corr     ON events(correlation_id);
+
+-- Sessions are MATERIALIZED. A session opens when presence becomes present
+-- and closes when it becomes absent (the grace window lives in presence
+-- smoothing). One session = one Asset = one Business Unit. Original start/end
+-- are preserved on correction.
+CREATE TABLE IF NOT EXISTS sessions (
+    id                TEXT PRIMARY KEY,
+    venue_id          TEXT NOT NULL,
+    asset_id          TEXT NOT NULL,
+    business_unit_id  TEXT,
+    type              TEXT NOT NULL DEFAULT 'usage',
+    start_ts          TEXT NOT NULL,
+    end_ts            TEXT,
+    duration_sec      INTEGER,
+    status            TEXT NOT NULL DEFAULT 'detected',  -- detected|confirmed|corrected|voided
+    confidence        REAL,
+    start_event_id    TEXT,
+    end_event_id      TEXT,
+    orig_start_ts     TEXT,                -- preserved when corrected
+    orig_end_ts       TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_venue     ON sessions(venue_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_asset_end ON sessions(asset_id, end_ts);

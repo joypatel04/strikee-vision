@@ -10,6 +10,7 @@ from typing import Callable, Optional
 
 from .geometry import detection_in_any_polygon
 from .perception import Detector
+from .sink import ChangeEvent, StateSink
 from .state import StateEngine
 from .types import (
     AssetRuntime, AssetSnapshot, RawObservation, SensorRuntime, SourceRuntime,
@@ -79,6 +80,7 @@ class LiveRuntime:
         frame_sources: dict,          # source_id -> FrameSource
         detector: Detector,
         engine: Optional[StateEngine] = None,
+        sink: Optional[StateSink] = None,
     ):
         self.venue_id = venue_id
         self.assets = assets
@@ -86,6 +88,8 @@ class LiveRuntime:
         self.frame_sources = frame_sources
         self.detector = detector
         self.engine = engine or StateEngine()
+        self.sink = sink
+        self._last_label: dict[str, str] = {}
 
     def current_snapshots(self) -> list[AssetSnapshot]:
         return [self.engine.snapshot(a) for a in self.assets]
@@ -117,11 +121,18 @@ class LiveRuntime:
 
         all_snaps: list[AssetSnapshot] = []
         changed: list[AssetSnapshot] = []
+        change_events: list[ChangeEvent] = []
         for asset in self.assets:
             snap, was_changed = self.engine.update(asset, raw_by_sensor, source_ok)
             all_snaps.append(snap)
             if was_changed:
+                prev = self._last_label.get(asset.id, "Unknown")
                 changed.append(snap)
+                change_events.append(ChangeEvent(prev_label=prev, snapshot=snap))
+            self._last_label[asset.id] = snap.label
+
+        if self.sink is not None and change_events:
+            self.sink.handle(self.venue_id, change_events)
         return all_snaps, changed
 
     def release(self) -> None:
@@ -136,10 +147,11 @@ def build_live_runtime(
     db, venue_id: str, detector: Detector,
     source_factory: Callable,     # (SourceRuntime) -> FrameSource
     engine: Optional[StateEngine] = None,
+    sink: Optional[StateSink] = None,
 ) -> LiveRuntime:
     assets, sources = load_venue_config(db, venue_id)
     frame_sources = {}
     for src in sources:
         if src.uri:
             frame_sources[src.id] = source_factory(src)
-    return LiveRuntime(venue_id, assets, sources, frame_sources, detector, engine)
+    return LiveRuntime(venue_id, assets, sources, frame_sources, detector, engine, sink)

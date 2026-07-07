@@ -20,6 +20,7 @@ from .db import Database
 from .entities import REGISTRY
 from .pipeline.broadcast import Broadcaster
 from .pipeline.manager import PerceptionUnavailable, RuntimeManager
+from .runtime_api import build_runtime_router
 
 WEB_DIR = Path(__file__).parent.parent / "web"
 
@@ -50,6 +51,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     for router in all_routers():
         app.include_router(router)
+    app.include_router(build_runtime_router())
 
     # --- live pipeline control (M2) ---------------------------------------
 
