@@ -120,9 +120,11 @@ class LiveRuntime:
         rerack_jump: int = 6,
         rerack_low_band: int = 2,
         rerack_high_band: int = 7,
+        debug_log=None,
     ):
         self.venue_id = venue_id
         self.assets = assets
+        self.debug_log = debug_log
         self.sources = sources
         self.frame_sources = frame_sources
         self.detector = detector                 # person / general detector
@@ -229,7 +231,7 @@ class LiveRuntime:
             self.sink.handle(self.venue_id, change_events)
 
         # snooker game state machine -> game_start / game_end events
-        if self.sink is not None and self._game_trackers:
+        if self._game_trackers:
             snap_by_asset = {s.asset_id: s for s in all_snaps}
             game_ts = self._clock()
             for asset in self.assets:
@@ -245,14 +247,25 @@ class LiveRuntime:
                     colored = colored or o.get("colored_present", False)
                     gs = gs or o.get("game_start", False)
                     player = player or o.get("player", False)
-                for ev in tracker.update(game_ts, red, colored, gs, player):
-                    snap = snap_by_asset.get(asset.id)
-                    if ev.kind == "game_start" and hasattr(self.sink, "record_game_start"):
-                        self.sink.record_game_start(self.venue_id, snap, ts=ev.ts,
-                                                    game_number=ev.game_number)
-                    elif ev.kind == "game_end" and hasattr(self.sink, "record_game_end"):
-                        self.sink.record_game_end(self.venue_id, snap, ts=ev.ts,
-                                                  game_number=ev.game_number)
+                evs = tracker.update(game_ts, red, colored, gs, player)
+                snap = snap_by_asset.get(asset.id)
+                if self.sink is not None:
+                    for ev in evs:
+                        if ev.kind == "game_start" and hasattr(self.sink, "record_game_start"):
+                            self.sink.record_game_start(self.venue_id, snap, ts=ev.ts,
+                                                        game_number=ev.game_number)
+                        elif ev.kind == "game_end" and hasattr(self.sink, "record_game_end"):
+                            self.sink.record_game_end(self.venue_id, snap, ts=ev.ts,
+                                                      game_number=ev.game_number)
+                if self.debug_log is not None and snap is not None:
+                    self.debug_log.row({
+                        "ts": game_ts, "table": asset.name, "red": red,
+                        "colored": int(colored), "game_start": int(gs),
+                        "player": int(player), "state": tracker.state,
+                        "red_floor": tracker._red_floor, "label": snap.label,
+                        "activity": snap.activity,
+                        "event": ";".join(e.kind for e in evs),
+                    })
 
         if self.sampler is not None:
             self._sample(all_snaps, raw_by_sensor)
@@ -306,6 +319,7 @@ def build_live_runtime(
     rerack_jump: int = 6,
     rerack_low_band: int = 2,
     rerack_high_band: int = 7,
+    debug_log=None,
 ) -> LiveRuntime:
     assets, sources = load_venue_config(db, venue_id)
     frame_sources = {}
@@ -317,4 +331,5 @@ def build_live_runtime(
                        snooker_detector=snooker_detector,
                        min_game_sec=min_game_sec, max_game_sec=max_game_sec,
                        rack_red_threshold=rack_red_threshold, rerack_jump=rerack_jump,
-                       rerack_low_band=rerack_low_band, rerack_high_band=rerack_high_band)
+                       rerack_low_band=rerack_low_band, rerack_high_band=rerack_high_band,
+                       debug_log=debug_log)

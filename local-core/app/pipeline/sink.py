@@ -116,12 +116,13 @@ class DbStateSink:
 
     def record_game_end(self, venue_id: str, s: AssetSnapshot,
                         ts: str = None, game_number: int = None) -> None:
-        """A game ended (reds cleared / max window) -> log a game_end event."""
+        """A game ended -> log a game_end event with an evidence snapshot."""
+        snapshot = self._capture_snapshot(venue_id, s)
         self.events.append({
             "venue_id": venue_id, "asset_id": s.asset_id,
             "business_unit_id": s.business_unit_id,
             "type": "game_end", "ts": ts or s.effective_at,
-            "origin": "system",
+            "origin": "system", "snapshot": snapshot,
             "reason": f"game {game_number}" if game_number else None,
         })
 

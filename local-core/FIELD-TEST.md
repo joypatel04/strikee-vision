@@ -133,6 +133,42 @@ SnapshotStore().cleanup(keep_days=7)
 Optional cloud backup: set `STRIKEE_S3_BUCKET` (needs `boto3` + AWS creds) to
 best-effort upload each snapshot to S3.
 
+## Validating a LIVE run (no video to re-watch)
+
+You can't rewind a live stream, so validate three ways together:
+
+1. **Ground truth (do this).** While it runs, jot down the real games on one
+   table — rough start/end times, or just a tally. This is your reference.
+2. **Compare the Games log.** Open the dashboard "Games today" panel (or
+   `GET /api/venues/{id}/games`). Compare count + times against your notes, and
+   **open each game's snapshot** to confirm it was a real rack / a real end.
+3. **Debug log — to understand *why*.** Run with debug on:
+
+   ```bash
+   STRIKEE_DEBUG=1 strikee-core
+   ```
+
+   This writes `debug_<venue>.csv` — one row per tick per table with what the
+   model saw (`red`, `game_start`, `player`, motion) and what the tracker decided
+   (`state`, `red_floor`, `event`). When a game is missed or false, this shows
+   exactly why, and which knob to turn. Examples:
+   - games **missed** and `red` peaks at ~6 on a fresh rack → lower
+     `STRIKEE_RACK_REDS` / `STRIKEE_RERACK_HIGH` to ~6.
+   - **extra** games and `red` swings a lot → raise `STRIKEE_RERACK_JUMP`.
+   - a real game ended late → check the `red`→0 tail; adjust nothing or lower
+     the end hold.
+
+**Tune → restart → re-observe.** All thresholds are env vars, so you iterate
+without touching code.
+
+**Optional — record for later review.** If you want to double-check a
+discrepancy against footage, record the stream to a file during the test (in a
+separate terminal), then delete it after:
+
+```bash
+ffmpeg -i "rtsp://USER:PASS@CAM_IP:554/stream1" -c copy -t 7200 test_recording.mp4
+```
+
 ## Tuning (no code edits — set env vars, then restart `strikee-core`)
 
 | Symptom | Knob | Try |

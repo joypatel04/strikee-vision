@@ -101,6 +101,11 @@ class RuntimeManager:
         rerack_high = int(os.environ.get("STRIKEE_RERACK_HIGH", "7"))
         kinds = self._venue_sensor_kinds(venue_id)
 
+        debug_log = None
+        if os.environ.get("STRIKEE_DEBUG"):
+            from ..debuglog import DebugLog
+            debug_log = DebugLog(os.environ.get("STRIKEE_DEBUG_FILE", f"debug_{venue_id}.csv"))
+
         def _build():
             person = YOLODetector(person_model) if (kinds & PERSON_KINDS) else None
             snooker = SnookerDetector(snooker_model) if (SNOOKER_KIND in kinds) else None
@@ -111,6 +116,7 @@ class RuntimeManager:
                 snooker_detector=snooker, min_game_sec=min_game, max_game_sec=max_game,
                 rack_red_threshold=rack_reds, rerack_jump=rerack_jump,
                 rerack_low_band=rerack_low, rerack_high_band=rerack_high,
+                debug_log=debug_log,
             )
 
         rt = await asyncio.to_thread(_build)
