@@ -99,6 +99,37 @@ def test_min_game_window_suppresses_early_end():
     assert tr.game_number == 1
 
 
+def test_midgame_concession_rerack_counts_new_game():
+    """A player concedes mid-game (reds still ~5, not potted down), balls are
+    re-racked -> reds jump back up -> old game ends, new game starts, WITHOUT
+    ever reaching the normal end phase."""
+    tr = SnookerGameTracker(confirm_ticks=2, restart_confirm_ticks=2,
+                            rack_red_threshold=10, rerack_jump=6)
+    start_a_game(tr)                                  # game 1, ~15 reds
+    # game progresses, reds fall to ~5 (mid-game)
+    for t, r in [(30, 12), (40, 9), (50, 7), (60, 5)]:
+        ev = tr.update(ts(t), r, True, False, False)
+        assert ev == [] and tr.game_number == 1
+    # concession + re-rack: reds jump back to a full rack
+    tr.update(ts(70), 15, True, False, False)         # 1st high tick
+    ev = tr.update(ts(80), 15, True, False, False)    # confirmed -> restart
+    assert [e.kind for e in ev] == ["game_end", "game_start"]
+    assert tr.game_number == 2
+    assert tr.state == IN_GAME
+
+
+def test_normal_potting_is_not_a_rerack():
+    """Reds only falling (normal play) must never trigger a re-rack; a small
+    detection wobble up must not either."""
+    tr = SnookerGameTracker(confirm_ticks=2, rack_red_threshold=10, rerack_jump=6)
+    start_a_game(tr)
+    # decline with a small +2 wobble (missed red re-detected) — not a re-rack
+    for t, r in [(30, 14), (40, 11), (50, 9), (60, 11), (70, 8), (80, 6)]:
+        tr.update(ts(t), r, True, False, False)
+    assert tr.game_number == 1
+    assert tr.state == IN_GAME
+
+
 def test_full_rack_starts_game_without_game_start_class():
     """When the model never fires game_start, a confirmed full rack of reds
     still starts a game (the camera1.mp4 case: game_start=0 but 16 reds)."""

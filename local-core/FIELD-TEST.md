@@ -27,8 +27,10 @@ So at the club you need **no internet** — only the camera.
   **lingering rack is not double-counted** (while a game is running, new rack
   detections are ignored). A game **ends** from the red-ball trajectory (reds
   clear to colours, then to none), then it waits for a player before the next
-  game. Each game is logged with a **snapshot + start/end time + duration** for
-  staff reconciliation.
+  game. A **mid-game re-rack** (a player concedes and all balls are brought back
+  — reds suddenly jump back up) is counted as a new game, and single-frame
+  detection dropouts are ignored so they don't fake one. Each game is logged with
+  a **snapshot + start/end time + duration** for staff reconciliation.
 
 > ⚠️ **Most important lesson from testing:** ball detection needs a
 > **good-quality stream**. Heavy compression destroys the small balls. Use the
@@ -137,6 +139,7 @@ best-effort upload each snapshot to S3.
 | Table goes Available during a long player pause | `STRIKEE_EXIT_TICKS` | raise it — this is the **no-play window** before a table frees up (e.g. 8–20 ≈ 1–2 min at a 7s tick) |
 | Table stays "in use" too long after players leave | `STRIKEE_EXIT_TICKS` | lower it |
 | Games over/under-counted | `STRIKEE_RACK_REDS` | reds needed to treat as a new rack (default 10; raise to be stricter) |
+| Mid-game re-rack (concession then new rack) missed / false | `STRIKEE_RERACK_JUMP` | how big a red-count jump counts as a re-rack (default 6; raise to be stricter) |
 | Two quick frames merged into one game | `STRIKEE_MIN_GAME_MIN` | the min game window — raise to suppress spurious quick restarts (your 15-min idea) |
 | A stuck game never ends | `STRIKEE_MAX_GAME_MIN` | force-end after this many minutes (default 45) |
 | Missed racks | sensor confidence | lower `conf_threshold`; use the main stream |

@@ -49,6 +49,7 @@ class GameEvent:
 class SnookerGameTracker:
     def __init__(self, confirm_ticks: int = 2, end_hold_ticks: int = 2,
                  restart_confirm_ticks: int = 2, rack_red_threshold: int = 10,
+                 rerack_jump: int = 6,
                  min_game_sec: float = 0.0, max_game_sec: float = 2700.0):
         self.confirm_ticks = confirm_ticks
         self.end_hold_ticks = end_hold_ticks
@@ -56,6 +57,13 @@ class SnookerGameTracker:
         # a game also starts on a confirmed full rack (many reds), so we still
         # count games when the model never fires the game_start class.
         self.rack_red_threshold = rack_red_threshold
+        # a mid-game RE-RACK is a sudden rise in red count from the game's low
+        # point (reds only fall as they are potted; a rise means all balls were
+        # brought back — e.g. a player conceded and a new game was set up).
+        self.rerack_jump = rerack_jump
+        self._red_floor: Optional[int] = None
+        self._rerack_streak = 0
+        self._floor_low_streak = 0    # confirm a lower red before lowering floor
         self.min_game_sec = min_game_sec        # ignore end signals before this
         self.max_game_sec = max_game_sec        # force-end after this
         self.state = SEARCH
@@ -82,11 +90,34 @@ class SnookerGameTracker:
                 events.append(self._begin_game(ts))
 
         elif self.state == IN_GAME:
-            if elapsed >= self.max_game_sec:
+            # track the game's low point, but only lower it after a CONFIRMED
+            # lower reading, so a single-frame red dropout can't falsely lower
+            # the floor and trigger a bogus re-rack.
+            if self._red_floor is None:
+                self._red_floor = red_count
+            elif red_count < self._red_floor:
+                self._floor_low_streak += 1
+                if self._floor_low_streak >= 2:
+                    self._red_floor = red_count
+                    self._floor_low_streak = 0
+            else:
+                self._floor_low_streak = 0
+            # RE-RACK: reds jumped back up to a full rack from the low point ->
+            # the previous game ended (possibly conceded mid-way) and a new one
+            # started. Caught here, before the normal end phase.
+            if red_count >= self.rack_red_threshold \
+                    and red_count >= self._red_floor + self.rerack_jump:
+                self._rerack_streak += 1
+                if self._rerack_streak >= self.restart_confirm_ticks:
+                    events.append(self._end_game(ts))
+                    events.append(self._begin_game(ts))
+            elif elapsed >= self.max_game_sec:
+                self._rerack_streak = 0
                 events.append(self._end_game(ts))
                 self.state = WAIT_PLAYER
             elif elapsed >= self.min_game_sec and red_count < 2 and colored_present \
                     and not game_start:
+                self._rerack_streak = 0
                 self._low_red_streak += 1
                 if self._low_red_streak >= self.end_hold_ticks:
                     self.state = CHECK_END
@@ -94,6 +125,7 @@ class SnookerGameTracker:
                     self._no_red_streak = 0
                     self._high_red_streak = 0
             else:
+                self._rerack_streak = 0
                 self._low_red_streak = 0
             # game_start is intentionally ignored while IN_GAME
 
@@ -132,6 +164,9 @@ class SnookerGameTracker:
         self.state = IN_GAME
         self._start_streak = 0
         self._low_red_streak = self._no_red_streak = self._high_red_streak = 0
+        self._red_floor = None            # fresh rack -> reset the low-point
+        self._rerack_streak = 0
+        self._floor_low_streak = 0
         return GameEvent("game_start", ts, self.game_number)
 
     def _end_game(self, ts: str) -> GameEvent:
