@@ -68,8 +68,9 @@ class RawObservation:
     """One tick's raw read from a single sensor."""
     present: bool
     confidence: float
-    count: int = 0          # persons in zone (for occupancy metrics)
-    active: bool = False    # movement detected this tick (activity facet)
+    count: int = 0            # persons/balls in zone (for metrics)
+    active: bool = False      # movement detected this tick (activity facet)
+    game_start: bool = False  # a new rack was detected this tick (snooker)
 
 
 @dataclass

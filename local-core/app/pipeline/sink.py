@@ -101,6 +101,17 @@ class DbStateSink:
                         "origin": "system", "correlation_id": open_session["id"],
                     })
 
+    def record_game_start(self, venue_id: str, s: AssetSnapshot) -> None:
+        """A new rack was detected -> log a game_start event with a snapshot.
+        This is the counted 'a new game began' marker for staff reconciliation."""
+        snapshot = self._capture_snapshot(venue_id, s)
+        self.events.append({
+            "venue_id": venue_id, "asset_id": s.asset_id,
+            "business_unit_id": s.business_unit_id,
+            "type": "game_start", "ts": s.effective_at,
+            "origin": "system", "snapshot": snapshot,
+        })
+
     def _capture_snapshot(self, venue_id: str, s: AssetSnapshot):
         """Save a labelled evidence image at game start (best-effort)."""
         if self.snapshot_store is None or self.frame_provider is None:

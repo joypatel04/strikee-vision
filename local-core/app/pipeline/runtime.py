@@ -20,6 +20,9 @@ from .types import (
 )
 
 
+_NO_OBS = RawObservation(False, 0.0)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -124,6 +127,7 @@ class LiveRuntime:
         self.motion_threshold = motion_threshold
         self._last_label: dict[str, str] = {}
         self._prev_points: dict[str, list] = {}
+        self._prev_game_start: dict[str, bool] = {}  # asset_id -> game_start last tick
         self._last_frames: dict[str, object] = {}   # source_id -> last frame
 
         # map each asset to its primary (or first) source, for snapshots
@@ -178,9 +182,18 @@ class LiveRuntime:
                 active = _motion(self._prev_points.get(sensor.id), points,
                                  self.motion_threshold)
                 self._prev_points[sensor.id] = points
-                raw_by_sensor[sensor.id] = RawObservation(
-                    present=obs["present"], confidence=obs["confidence"],
-                    count=obs["count"], active=active)
+                if sensor.kind == SNOOKER_KIND:
+                    # a table is "in use" only when there is PLAY (motion) or a
+                    # new rack — NOT merely because balls sit on it (players
+                    # leave balls between games).
+                    game_start = obs.get("game_start", False)
+                    raw_by_sensor[sensor.id] = RawObservation(
+                        present=active or game_start, confidence=obs["confidence"],
+                        count=obs["count"], active=active, game_start=game_start)
+                else:
+                    raw_by_sensor[sensor.id] = RawObservation(
+                        present=obs["present"], confidence=obs["confidence"],
+                        count=obs["count"], active=active)
 
         all_snaps: list[AssetSnapshot] = []
         changed: list[AssetSnapshot] = []
@@ -196,6 +209,16 @@ class LiveRuntime:
 
         if self.sink is not None and change_events:
             self.sink.handle(self.venue_id, change_events)
+
+        # new-rack detection -> a game_start event (a new game began)
+        if self.sink is not None and hasattr(self.sink, "record_game_start"):
+            snap_by_asset = {s.asset_id: s for s in all_snaps}
+            for asset in self.assets:
+                gs = any(raw_by_sensor.get(s.id, _NO_OBS).game_start
+                         for s in asset.sensors if s.kind == SNOOKER_KIND)
+                if gs and not self._prev_game_start.get(asset.id, False):
+                    self.sink.record_game_start(self.venue_id, snap_by_asset[asset.id])
+                self._prev_game_start[asset.id] = gs
 
         if self.sampler is not None:
             self._sample(all_snaps, raw_by_sensor)

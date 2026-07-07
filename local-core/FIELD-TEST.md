@@ -15,11 +15,15 @@ So at the club you need **no internet** — only the camera.
 
 ## What it tracks (snooker game mode)
 
-A table is **in use / game in progress** when balls are on it. A **session = a
-game**: it starts when a rack/balls appear and ends when the table clears (for a
-sustained window). "Active" vs "Idle" comes from motion (a shot vs a pause). This
-is robust to the model missing balls in some frames — persistence + the second
-camera keep the game detected.
+- **In use vs Available = actual play (motion).** A table is **in use** only when
+  someone is playing (movement on the table). Balls left sitting after a game do
+  **not** count as in use — after a short no-play window the table reads
+  **Available** (players leave balls/lights between games). "Active" = a shot
+  happening; "Occupied – Idle" = a brief pause mid-game.
+- **A new game = a `game_start` (rack) detection** from your trained model. Each
+  one is logged with a **snapshot + timestamp** in the games log — this is what
+  you count and reconcile against staff. It does not depend on catching every
+  ball; the rack itself is the trigger.
 
 > ⚠️ **Most important lesson from testing:** ball detection needs a
 > **good-quality stream**. Heavy compression destroys the small balls. Use the
@@ -125,8 +129,9 @@ best-effort upload each snapshot to S3.
 | Balls not detected / table shows Available during a game | **stream quality** | use the **main/high-res** RTSP stream, not a sub-stream |
 | Misses some balls | sensor confidence | lower it: `PATCH /api/sensors/{id}` `{"conf_threshold": 0.15}` via `/docs` |
 | Needs fewer balls to count as a game | sensor `params.min_balls` | set `{"params": {"min_balls": 2}}` |
-| Game ends during a long player pause | `STRIKEE_EXIT_TICKS` | raise it (e.g. 8–12 = longer "still a game" window) |
-| Game flickers on/off | `STRIKEE_ENTER_TICKS` / `STRIKEE_EXIT_TICKS` | raise (e.g. 3 / 6) |
+| Table goes Available during a long player pause | `STRIKEE_EXIT_TICKS` | raise it — this is the **no-play window** before a table frees up (e.g. 8–20 ≈ 1–2 min at a 7s tick) |
+| Table stays "in use" too long after players leave | `STRIKEE_EXIT_TICKS` | lower it |
+| Missed / extra games in the log | sensor confidence / `min_balls` | tune so the rack (`game_start`) is caught reliably; use the main stream |
 | "Active" vs "Idle" wrong | `STRIKEE_MOTION_THRESHOLD`, `STRIKEE_STILL_TICKS` | tune threshold / still ticks |
 | Sampling too slow/fast | `STRIKEE_TICK_SEC` | 5–10 |
 | Use a different snooker model | `STRIKEE_SNOOKER_MODEL` | path to a `.pt` |

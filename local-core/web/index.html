@@ -230,14 +230,15 @@
       const today = new Date().toISOString().slice(0, 10);
       const data = await (await fetch(`/api/venues/${currentVenue}/games?date=${today}`)).json();
       const g = document.getElementById('games');
-      g.innerHTML = data.games.length ? data.games.map(x => `
+      g.innerHTML = data.games.length ? (
+        `<div class="muted" style="margin-bottom:6px">${data.count} game(s) today</div>` +
+        data.games.map(x => `
         <div class="row">
           ${x.snapshot ? `<a href="${x.snapshot}" target="_blank"><img src="${x.snapshot}" style="height:44px;border-radius:4px;border:1px solid #2b3240"></a>` : ''}
           <span class="grow">${x.table}
-            <span class="ts">${shortTime(x.start_ts)}${x.end_ts ? ' → ' + shortTime(x.end_ts) : ' (in progress)'} · ${dur(x.duration_sec)}</span>
+            <span class="ts">new game @ ${shortTime(x.ts)}</span>
           </span>
-          <span class="badge b-${x.status}">${x.status}</span>
-        </div>`).join('') : '<div class="muted">No games recorded today yet.</div>';
+        </div>`).join('')) : '<div class="muted">No games recorded today yet.</div>';
     }
 
     async function selectVenue(venueId) {

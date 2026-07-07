@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS events (
     actor             TEXT,
     reason            TEXT,
     correlation_id    TEXT,                -- e.g. the session id this relates to
+    snapshot          TEXT,                -- evidence image path (e.g. game_start)
     created_at        TEXT NOT NULL
 );
 

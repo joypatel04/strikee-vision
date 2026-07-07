@@ -29,12 +29,14 @@ channels queue; ack / resolve + a review queue.
 from **Occupied – Idle**.
 
 **Snooker game mode:** a `snooker_game` sensor uses a custom model (`best.pt`)
-with CLAHE lighting normalization to detect **balls on the table** → a game in
-progress → a **session per game**. Robust to intermittent misses via
-smoothing + primary/supporting multi-camera fusion. Person mode
-(`occupancy`, upgradeable to `yolo11x`) remains for people-visible cameras.
-Models are selected per sensor `type`; set `STRIKEE_SNOOKER_MODEL` /
-`STRIKEE_PERSON_MODEL` to override.
+with CLAHE lighting normalization. Occupancy = **actual play (motion)**, so a
+table with balls left sitting reads **Available** (not in use); it reads in-use
+only when someone is playing. A **new game** is a `game_start` (rack) detection,
+logged with a timestamped **snapshot** for staff reconciliation
+(`GET /api/venues/{id}/games`). Robust via CLAHE + smoothing + primary/supporting
+multi-camera fusion. Person mode (`occupancy`, upgradeable to `yolo11x`) remains
+for people-visible cameras. Models selected per sensor `type`; override with
+`STRIKEE_SNOOKER_MODEL` / `STRIKEE_PERSON_MODEL`.
 
 **M6:** desktop launcher (`strikee-core`) + Windows packaging — see
 [packaging/BUILD.md](packaging/BUILD.md).

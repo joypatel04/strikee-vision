@@ -60,34 +60,79 @@ def test_observe_dispatch_by_kind():
     assert obs["count"] == 10
 
 
-def test_snooker_runtime_game_session_end_to_end():
-    """A game (balls on table) opens a session; clearing the table closes it."""
+def _moving_rack(offset):
+    # a rack whose balls are shifted by `offset` px so consecutive frames show
+    # motion (a shot in progress)
+    dets = [ball(50 + i * 8 + offset, 100) for i in range(10)]
+    return dets
+
+
+def _scattered_balls():
+    # leftover balls from a finished game — present on the table, but NOT a rack
+    # (no game_start) and static (no motion)
+    return [ball(50, 100), ball(200, 300), ball(350, 150), ball(120, 250)]
+
+
+def test_idle_balls_are_available_not_in_use():
+    """Leftover balls sitting with NO motion and NO rack must read Available
+    (players left the balls between games)."""
     db = Database(":memory:")
     sink = DbStateSink(EventStore(db), SessionStore(db))
     sensor = _snooker_sensor()
     asset = AssetRuntime(id="a1", name="Table 1", business_unit_id="snooker",
                          sensors=[sensor])
-    source = SourceRuntime(id="src1", name="Overhead Cam", uri="fake", sensors=[sensor])
-
-    rack, clear = a_rack(), []   # game in progress, then table cleared
-    script = [rack, rack, rack, clear, clear, clear]
+    source = SourceRuntime(id="src1", name="Cam", uri="fake", sensors=[sensor])
+    # static scattered balls every tick -> present but no motion, no rack
     rt = LiveRuntime("v1", [asset], [source], {"src1": FakeFrameSource("src1")},
-                     detector=None, engine=StateEngine(enter_ticks=2, exit_ticks=3),
-                     sink=sink, snooker_detector=FakeDetector(script))
-
-    labels = []
-    for _ in range(6):
+                     detector=None, engine=StateEngine(enter_ticks=1, exit_ticks=1),
+                     sink=sink, snooker_detector=FakeDetector(lambda f: _scattered_balls()))
+    for _ in range(4):
         rt.tick()
-        labels.append(rt.current_snapshots()[0].label)
+    # balls are there, but nobody is playing -> Available
+    assert rt.current_snapshots()[0].label == "Available"
+    assert len(SessionStore(db).list("v1")) == 0    # no usage session opened
+    db.close()
 
-    # game detected while balls present, then Available once cleared
-    assert labels[1] in ("Occupied", "Active (In Use)", "Occupied – Idle")
-    assert labels[-1] == "Available"
 
-    sessions = SessionStore(db).list("v1")
-    assert len(sessions) == 1                      # one game session
-    assert sessions[0]["business_unit_id"] == "snooker"
-    assert sessions[0]["end_ts"] is not None       # game opened AND closed
+def test_play_motion_makes_table_in_use():
+    """Motion on the table (a shot) -> the table reads in use."""
+    db = Database(":memory:")
+    sink = DbStateSink(EventStore(db), SessionStore(db))
+    sensor = _snooker_sensor()
+    asset = AssetRuntime(id="a1", name="Table 1", business_unit_id="snooker",
+                         sensors=[sensor])
+    source = SourceRuntime(id="src1", name="Cam", uri="fake", sensors=[sensor])
+    # balls MOVE each tick -> motion -> play
+    script = [_moving_rack(0), _moving_rack(30), _moving_rack(60), _moving_rack(90)]
+    rt = LiveRuntime("v1", [asset], [source], {"src1": FakeFrameSource("src1")},
+                     detector=None, engine=StateEngine(enter_ticks=1, exit_ticks=3),
+                     sink=sink, snooker_detector=FakeDetector(script))
+    for _ in range(4):
+        rt.tick()
+    assert rt.current_snapshots()[0].presence == "present"   # in use (play)
+    db.close()
+
+
+def test_new_rack_emits_game_start_event():
+    """A newly detected rack -> a game_start event (the counted 'new game')."""
+    db = Database(":memory:")
+    sink = DbStateSink(EventStore(db), SessionStore(db))
+    sensor = _snooker_sensor()
+    asset = AssetRuntime(id="a1", name="Table 1", business_unit_id="snooker",
+                         sensors=[sensor])
+    source = SourceRuntime(id="src1", name="Cam", uri="fake", sensors=[sensor])
+    # no rack, then a rack appears (game_start), then it persists
+    no_rack = [ball(50 + i * 8, 100) for i in range(10)]   # balls, no game_start label
+    script = [no_rack, a_rack(), a_rack(), no_rack, a_rack()]
+    rt = LiveRuntime("v1", [asset], [source], {"src1": FakeFrameSource("src1")},
+                     detector=None, engine=StateEngine(enter_ticks=1),
+                     sink=sink, snooker_detector=FakeDetector(script))
+    for _ in range(5):
+        rt.tick()
+    game_starts = [e for e in EventStore(db).list("v1") if e["type"] == "game_start"]
+    # two distinct racks (tick 2 and tick 5) -> two games; the persisting rack
+    # in between is not double-counted
+    assert len(game_starts) == 2
     db.close()
 
 
@@ -104,7 +149,9 @@ def test_snooker_missing_frame_persists_via_fusion():
     srcP = SourceRuntime(id="srcP", name="End A", uri="fake", sensors=[prim])
     srcS = SourceRuntime(id="srcS", name="End B", uri="fake", sensors=[supp])
 
+    # supporting sees a fresh rack (game_start) at high confidence
     rack_hi = [ball(50 + i * 8, 100, conf=0.8) for i in range(10)]
+    rack_hi.append(Detection(bbox=(60, 90, 120, 150), confidence=0.8, label="game_start"))
     # detector diverges by frame token: primary's source empty, supporting's full
     detector = FakeDetector(lambda tok: rack_hi if tok == "S" else [])
     rt = LiveRuntime(

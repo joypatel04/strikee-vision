@@ -13,7 +13,7 @@ from .repository import new_id, now_iso
 _EVENT_COLS = [
     "venue_id", "asset_id", "business_unit_id", "type", "ts",
     "presence", "activity", "health", "label", "prev_label",
-    "confidence", "origin", "actor", "reason", "correlation_id",
+    "confidence", "origin", "actor", "reason", "correlation_id", "snapshot",
 ]
 
 

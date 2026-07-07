@@ -132,27 +132,23 @@ def build_runtime_router() -> APIRouter:
     @router.get("/api/venues/{venue_id}/games")
     def games_report(venue_id: str, date: Optional[str] = None,
                      db: Database = Depends(get_db)):
-        """Daily games log for staff reconciliation: each game with its start
-        time, duration, table, status, and evidence snapshot. `date` filters to
-        YYYY-MM-DD (start_ts prefix); omit for the most recent games."""
-        rows = SessionStore(db).list(venue_id, limit=500)
+        """Daily games log for staff reconciliation: each new game (a detected
+        rack / game_start) with its time, table, and evidence snapshot. `date`
+        filters to YYYY-MM-DD; omit for the most recent games."""
+        rows = [e for e in EventStore(db).list(venue_id, limit=2000)
+                if e["type"] == "game_start"]
         if date:
-            rows = [r for r in rows if (r["start_ts"] or "").startswith(date)]
-        # attach asset names
-        names = {}
+            rows = [e for e in rows if (e["ts"] or "").startswith(date)]
         with db.cursor() as cur:
             cur.execute("SELECT id, name FROM assets WHERE venue_id = ?", (venue_id,))
             names = {r["id"]: r["name"] for r in cur.fetchall()}
         games = [{
-            "session_id": r["id"],
-            "table": names.get(r["asset_id"], r["asset_id"]),
-            "business_unit_id": r["business_unit_id"],
-            "start_ts": r["start_ts"],
-            "end_ts": r["end_ts"],
-            "duration_sec": r["duration_sec"],
-            "status": r["status"],
-            "snapshot": f"/snapshots/{r['start_snapshot']}" if r.get("start_snapshot") else None,
-        } for r in rows]
+            "event_id": e["id"],
+            "table": names.get(e["asset_id"], e["asset_id"]),
+            "business_unit_id": e["business_unit_id"],
+            "ts": e["ts"],
+            "snapshot": f"/snapshots/{e['snapshot']}" if e.get("snapshot") else None,
+        } for e in rows]
         return {"date": date, "count": len(games), "games": games}
 
     @router.get("/api/venues/{venue_id}/review-queue")

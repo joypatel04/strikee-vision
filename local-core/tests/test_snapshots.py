@@ -80,21 +80,21 @@ def test_sink_no_snapshot_without_frame():
 
 
 def test_games_report_endpoint(client):
+    """The games report lists game_start events (new games) with snapshots."""
     db = client.app.state.db
-    ss = SessionStore(db)
-    s = ss.open("v1", "a1", "snooker", "2026-07-08T14:00:00+00:00",
-                start_snapshot="v1/2026-07-08/Table_1_140000.jpg")
-    ss.close(s["id"], "2026-07-08T14:45:00+00:00")
-    # need the asset name to resolve
-    from app.repository import Repository
-    from app.entities import REGISTRY
-    # games for the day
-    r = client.get("/api/venues/v1/games?date=2026-07-08")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["count"] == 1
+    es = EventStore(db)
+    es.append({"venue_id": "v1", "asset_id": "a1", "business_unit_id": "snooker",
+               "type": "game_start", "ts": "2026-07-08T14:00:00+00:00",
+               "snapshot": "v1/2026-07-08/Table_1_140000.jpg"})
+    es.append({"venue_id": "v1", "asset_id": "a1", "business_unit_id": "snooker",
+               "type": "game_start", "ts": "2026-07-08T15:30:00+00:00",
+               "snapshot": "v1/2026-07-08/Table_1_153000.jpg"})
+    # a non-game event should be ignored
+    es.append({"venue_id": "v1", "asset_id": "a1", "type": "state_change",
+               "ts": "2026-07-08T14:10:00+00:00"})
+
+    body = client.get("/api/venues/v1/games?date=2026-07-08").json()
+    assert body["count"] == 2                       # two games that day
     g = body["games"][0]
-    assert g["duration_sec"] == 2700
-    assert g["snapshot"] == "/snapshots/v1/2026-07-08/Table_1_140000.jpg"
-    # a different date returns nothing
+    assert g["snapshot"].startswith("/snapshots/v1/2026-07-08/")
     assert client.get("/api/venues/v1/games?date=2026-07-09").json()["count"] == 0
