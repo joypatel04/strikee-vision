@@ -217,6 +217,7 @@ def build_live_runtime(
     engine: Optional[StateEngine] = None,
     sink: Optional[StateSink] = None,
     sampler=None,
+    motion_threshold: float = 8.0,
 ) -> LiveRuntime:
     assets, sources = load_venue_config(db, venue_id)
     frame_sources = {}
@@ -224,4 +225,4 @@ def build_live_runtime(
         if src.uri:
             frame_sources[src.id] = source_factory(src)
     return LiveRuntime(venue_id, assets, sources, frame_sources, detector,
-                       engine, sink, sampler)
+                       engine, sink, sampler, motion_threshold=motion_threshold)

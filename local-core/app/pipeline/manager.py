@@ -7,6 +7,7 @@ pipeline is started, so importing this module never pulls heavy deps.
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Optional
 
 from ..notify import NotificationEngine
@@ -67,12 +68,20 @@ class RuntimeManager:
         sink = DbStateSink(EventStore(self._db), SessionStore(self._db), notifier)
         sampler = MetricStore(self._db)
 
+        # Field-test tunables via env (no code edit needed at the venue).
+        engine = StateEngine(
+            enter_ticks=int(os.environ.get("STRIKEE_ENTER_TICKS", "2")),
+            exit_ticks=int(os.environ.get("STRIKEE_EXIT_TICKS", "3")),
+            activity_still_ticks=int(os.environ.get("STRIKEE_STILL_TICKS", "3")),
+        )
+        motion = float(os.environ.get("STRIKEE_MOTION_THRESHOLD", "8.0"))
+
         def _build():
             detector = YOLODetector(self._model)
             return build_live_runtime(
                 self._db, venue_id, detector,
                 source_factory=lambda s: OpenCVFrameSource(s.id, s.uri),
-                engine=StateEngine(), sink=sink, sampler=sampler,
+                engine=engine, sink=sink, sampler=sampler, motion_threshold=motion,
             )
 
         rt = await asyncio.to_thread(_build)
