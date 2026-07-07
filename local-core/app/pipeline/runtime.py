@@ -5,7 +5,7 @@ so it is testable without cameras or a model.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from .geometry import detection_in_any_polygon
@@ -14,7 +14,12 @@ from .sink import ChangeEvent, StateSink
 from .state import StateEngine
 from .types import (
     AssetRuntime, AssetSnapshot, RawObservation, SensorRuntime, SourceRuntime,
+    PRESENCE_PRESENT, HEALTH_OK,
 )
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 # --- config loading from the SQLite config store --------------------------
@@ -81,6 +86,8 @@ class LiveRuntime:
         detector: Detector,
         engine: Optional[StateEngine] = None,
         sink: Optional[StateSink] = None,
+        sampler=None,
+        clock=_now,
     ):
         self.venue_id = venue_id
         self.assets = assets
@@ -89,6 +96,8 @@ class LiveRuntime:
         self.detector = detector
         self.engine = engine or StateEngine()
         self.sink = sink
+        self.sampler = sampler
+        self._clock = clock
         self._last_label: dict[str, str] = {}
 
     def current_snapshots(self) -> list[AssetSnapshot]:
@@ -114,10 +123,13 @@ class LiveRuntime:
         for src in self.sources:
             dets = detections.get(src.id, [])
             for sensor in src.sensors:
-                in_zone = [d for d in dets if detection_in_any_polygon(d, sensor.zone_polygons)]
-                present = any(d.confidence >= sensor.conf_threshold for d in in_zone)
+                in_zone = [d for d in dets
+                           if d.confidence >= sensor.conf_threshold
+                           and detection_in_any_polygon(d, sensor.zone_polygons)]
+                present = len(in_zone) > 0
                 conf = max((d.confidence for d in in_zone), default=0.0)
-                raw_by_sensor[sensor.id] = RawObservation(present, conf)
+                raw_by_sensor[sensor.id] = RawObservation(
+                    present=present, confidence=conf, count=len(in_zone))
 
         all_snaps: list[AssetSnapshot] = []
         changed: list[AssetSnapshot] = []
@@ -133,7 +145,36 @@ class LiveRuntime:
 
         if self.sink is not None and change_events:
             self.sink.handle(self.venue_id, change_events)
+
+        if self.sampler is not None:
+            self._sample(all_snaps, raw_by_sensor)
         return all_snaps, changed
+
+    def _sample(self, snaps: list[AssetSnapshot], raw_by_sensor: dict) -> None:
+        """Emit one set of scalar metric samples per asset this tick."""
+        ts = self._clock()
+        # persons per asset = max count across its occupancy sensors (avoid
+        # double-counting the same people across primary+supporting views).
+        persons: dict[str, int] = {}
+        for asset in self.assets:
+            best = 0
+            for s in asset.sensors:
+                if s.kind in ("occupancy", "presence"):
+                    obs = raw_by_sensor.get(s.id)
+                    if obs:
+                        best = max(best, obs.count)
+            persons[asset.id] = best
+
+        samples = []
+        for snap in snaps:
+            base = {"asset_id": snap.asset_id, "business_unit_id": snap.business_unit_id}
+            samples.append({**base, "metric": "present",
+                            "value": 1.0 if snap.presence == PRESENCE_PRESENT else 0.0})
+            samples.append({**base, "metric": "persons", "value": persons.get(snap.asset_id, 0)})
+            samples.append({**base, "metric": "confidence", "value": snap.confidence})
+            samples.append({**base, "metric": "health_ok",
+                            "value": 1.0 if snap.health == HEALTH_OK else 0.0})
+        self.sampler.record(self.venue_id, ts, samples)
 
     def release(self) -> None:
         for fs in self.frame_sources.values():
@@ -148,10 +189,12 @@ def build_live_runtime(
     source_factory: Callable,     # (SourceRuntime) -> FrameSource
     engine: Optional[StateEngine] = None,
     sink: Optional[StateSink] = None,
+    sampler=None,
 ) -> LiveRuntime:
     assets, sources = load_venue_config(db, venue_id)
     frame_sources = {}
     for src in sources:
         if src.uri:
             frame_sources[src.id] = source_factory(src)
-    return LiveRuntime(venue_id, assets, sources, frame_sources, detector, engine, sink)
+    return LiveRuntime(venue_id, assets, sources, frame_sources, detector,
+                       engine, sink, sampler)

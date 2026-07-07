@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from ..store import EventStore, SessionStore
+from ..store import EventStore, MetricStore, SessionStore
 from .broadcast import Broadcaster
 from .runtime import LiveRuntime, build_live_runtime
 from .sink import DbStateSink
@@ -60,13 +60,14 @@ class RuntimeManager:
             ) from exc
 
         sink = DbStateSink(EventStore(self._db), SessionStore(self._db))
+        sampler = MetricStore(self._db)
 
         def _build():
             detector = YOLODetector(self._model)
             return build_live_runtime(
                 self._db, venue_id, detector,
                 source_factory=lambda s: OpenCVFrameSource(s.id, s.uri),
-                engine=StateEngine(), sink=sink,
+                engine=StateEngine(), sink=sink, sampler=sampler,
             )
 
         rt = await asyncio.to_thread(_build)

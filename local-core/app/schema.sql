@@ -165,3 +165,20 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_venue     ON sessions(venue_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_asset_end ON sessions(asset_id, end_ts);
+
+-- ── Metric samples (M4) ────────────────────────────────────────────────
+-- Periodic scalar snapshots, one set per asset per tick. High volume, short
+-- retention (downsampling to hourly/daily aggregates is a later concern).
+-- Long format: one row per (asset, metric) per tick.
+CREATE TABLE IF NOT EXISTS metric_samples (
+    id                TEXT PRIMARY KEY,
+    venue_id          TEXT NOT NULL,
+    asset_id          TEXT,
+    business_unit_id  TEXT,
+    ts                TEXT NOT NULL,
+    metric            TEXT NOT NULL,       -- present | persons | confidence | health_ok
+    value             REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_samples_venue_ts   ON metric_samples(venue_id, ts);
+CREATE INDEX IF NOT EXISTS idx_samples_asset_metric ON metric_samples(asset_id, metric, ts);

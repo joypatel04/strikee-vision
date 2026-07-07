@@ -4,10 +4,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from .analytics import AnalyticsStore
 from .api import get_db
 from .db import Database
 from .review import ReviewService
-from .store import EventStore, SessionStore
+from .store import EventStore, MetricStore, SessionStore
 
 
 class CorrectBody(BaseModel):
@@ -71,5 +72,31 @@ def build_runtime_router() -> APIRouter:
         if s is None:
             raise HTTPException(404, "session not found")
         return s
+
+    # --- metric samples + analytics (M4) ----------------------------------
+
+    @router.get("/api/venues/{venue_id}/metrics")
+    def list_metrics(venue_id: str, asset_id: Optional[str] = None,
+                     metric: Optional[str] = None, limit: int = 500,
+                     db: Database = Depends(get_db)):
+        return MetricStore(db).list(venue_id, asset_id=asset_id, metric=metric, limit=limit)
+
+    @router.get("/api/venues/{venue_id}/analytics/summary")
+    def analytics_summary(venue_id: str, db: Database = Depends(get_db)):
+        a = AnalyticsStore(db)
+        return {
+            "overview": a.venue_overview(venue_id),
+            "by_business_unit": a.summary_by_business_unit(venue_id),
+            "event_counts": a.event_counts(venue_id),
+        }
+
+    @router.get("/api/venues/{venue_id}/analytics/assets")
+    def analytics_assets(venue_id: str, db: Database = Depends(get_db)):
+        return AnalyticsStore(db).asset_utilization(venue_id)
+
+    @router.get("/api/venues/{venue_id}/analytics/occupancy")
+    def analytics_occupancy(venue_id: str, asset_id: str, metric: str = "present",
+                            db: Database = Depends(get_db)):
+        return AnalyticsStore(db).occupancy_series(venue_id, asset_id, metric=metric)
 
     return router

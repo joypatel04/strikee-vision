@@ -166,3 +166,40 @@ class SessionStore:
             )
             cur.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
             return dict(cur.fetchone())
+
+
+class MetricStore:
+    """Writes periodic scalar samples (one row per asset per metric per tick).
+    Doubles as the runtime's sampler: it exposes record(venue_id, ts, samples)."""
+
+    def __init__(self, db):
+        self.db = db
+
+    def record(self, venue_id: str, ts: str, samples: list[dict]) -> None:
+        """samples: [{asset_id, business_unit_id, metric, value}, ...]"""
+        if not samples:
+            return
+        with self.db.cursor() as cur:
+            cur.executemany(
+                """INSERT INTO metric_samples
+                   (id, venue_id, asset_id, business_unit_id, ts, metric, value)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                [(new_id(), venue_id, s.get("asset_id"), s.get("business_unit_id"),
+                  ts, s["metric"], float(s["value"])) for s in samples],
+            )
+
+    def list(self, venue_id: str, asset_id: Optional[str] = None,
+             metric: Optional[str] = None, limit: int = 500) -> list[dict]:
+        sql = "SELECT * FROM metric_samples WHERE venue_id = ?"
+        args: list = [venue_id]
+        if asset_id:
+            sql += " AND asset_id = ?"
+            args.append(asset_id)
+        if metric:
+            sql += " AND metric = ?"
+            args.append(metric)
+        sql += " ORDER BY ts DESC LIMIT ?"
+        args.append(limit)
+        with self.db.cursor() as cur:
+            cur.execute(sql, args)
+            return [dict(r) for r in cur.fetchall()]

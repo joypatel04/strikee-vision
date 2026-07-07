@@ -66,6 +66,7 @@
   </header>
   <main>
     <div class="statusbar" id="statusbar"></div>
+    <div class="statusbar" id="analytics"></div>
     <div class="grid" id="grid"></div>
     <div class="muted" id="empty" style="margin-top:16px"></div>
     <div class="panels">
@@ -168,6 +169,16 @@
         </div>`).join('') : '<div class="muted">No sessions yet.</div>';
     }
 
+    async function loadAnalytics() {
+      if (!currentVenue) return;
+      const a = await (await fetch(`/api/venues/${currentVenue}/analytics/summary`)).json();
+      const o = a.overview || {};
+      const bu = (a.by_business_unit || []).map(b =>
+        `${b.business_unit_id}: ${b.session_count} sessions`).join(' · ');
+      document.getElementById('analytics').textContent =
+        `today: ${o.active_sessions||0} active · ${o.total_sessions||0} sessions · ${o.total_events||0} events${bu ? '  —  ' + bu : ''}`;
+    }
+
     async function loadEvents() {
       if (!currentVenue) return;
       const rows = await (await fetch(`/api/venues/${currentVenue}/events?limit=30`)).json();
@@ -187,6 +198,7 @@
       refreshStatus();
       loadSessions();
       loadEvents();
+      loadAnalytics();
     }
 
     async function init() {
@@ -211,7 +223,7 @@
       if (venues.length) selectVenue(venues[0].id);
       else document.getElementById('empty').textContent =
         'No venues yet. Create one via POST /api/venues (see /docs).';
-      setInterval(() => { refreshStatus(); loadSessions(); loadEvents(); }, 5000);
+      setInterval(() => { refreshStatus(); loadSessions(); loadEvents(); loadAnalytics(); }, 5000);
     }
     init();
   </script>
