@@ -1,0 +1,20 @@
+{
+  "zones": [
+    {
+      "name": "Snooker Table 1",
+      "asset_type": "Snooker Table",
+      "polygon": [[420, 260], [880, 250], [910, 560], [400, 580]],
+      "conf": 0.35,
+      "min_start_ticks": 2,
+      "min_clear_ticks": 3
+    },
+    {
+      "name": "Snooker Table 2",
+      "asset_type": "Snooker Table",
+      "polygon": [[980, 250], [1440, 260], [1450, 580], [960, 560]],
+      "conf": 0.35,
+      "min_start_ticks": 2,
+      "min_clear_ticks": 3
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+.venv/
+runs/
+*.pt
+frame.jpg
+zones.json
+__pycache__/
+*.pyc

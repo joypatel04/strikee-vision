@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Strikee Vision — Local Core</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0;
+           background: #0f1216; color: #e6e9ef; }
+    header { padding: 16px 24px; border-bottom: 1px solid #232833;
+             display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #f0b429; }
+    .dot.ok { background: #22c55e; }
+    main { padding: 24px; max-width: 900px; }
+    .card { background: #161b22; border: 1px solid #232833; border-radius: 10px;
+            padding: 16px 18px; margin-bottom: 16px; }
+    .muted { color: #8b93a1; font-size: 13px; }
+    code { background: #0f1216; padding: 1px 6px; border-radius: 4px; }
+    ul { margin: 8px 0 0; padding-left: 18px; line-height: 1.7; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="statusDot"></span>
+    <h1>Strikee Vision — Local Core</h1>
+    <span class="muted" id="version"></span>
+  </header>
+  <main>
+    <div class="card">
+      <strong>Status</strong>
+      <div class="muted" id="statusText">checking…</div>
+    </div>
+    <div class="card">
+      <strong>Configuration API</strong>
+      <div class="muted">CRUD endpoints available under <code>/api/…</code>. Full API docs at <code>/docs</code>.</div>
+      <ul id="entities"></ul>
+    </div>
+    <div class="card muted">
+      M1 skeleton. Live asset grid, events, and sessions arrive in M2–M3.
+    </div>
+  </main>
+  <script>
+    async function load() {
+      try {
+        const res = await fetch('/health');
+        const h = await res.json();
+        document.getElementById('statusDot').classList.add('ok');
+        document.getElementById('statusText').textContent =
+          `${h.status} · db: ${h.db}`;
+        document.getElementById('version').textContent = 'v' + h.version;
+        const ul = document.getElementById('entities');
+        ul.innerHTML = h.entities.map(e => `<li><code>/api/${e}</code></li>`).join('');
+      } catch (e) {
+        document.getElementById('statusText').textContent = 'Local Core unreachable';
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

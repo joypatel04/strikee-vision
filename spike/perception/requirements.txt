@@ -1,0 +1,5 @@
+# Perception spike dependencies
+# YOLO detection + video I/O. CPU-friendly; nano model is the default.
+ultralytics>=8.3.0
+opencv-python>=4.9.0
+numpy>=1.26.0
