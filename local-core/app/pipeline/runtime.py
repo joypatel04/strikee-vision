@@ -8,7 +8,9 @@ import json
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from .geometry import detection_in_any_polygon
+import math
+
+from .geometry import detection_in_any_polygon, ground_point
 from .perception import Detector
 from .sink import ChangeEvent, StateSink
 from .state import StateEngine
@@ -20,6 +22,24 @@ from .types import (
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _centroid(points: list) -> Optional[tuple]:
+    n = len(points)
+    if n == 0:
+        return None
+    return (sum(p[0] for p in points) / n, sum(p[1] for p in points) / n)
+
+
+def _motion(prev: Optional[list], cur: list, threshold: float) -> bool:
+    """Movement between ticks. Needs prior history — the first sighting of a
+    person is not counted as motion (we can't measure it yet)."""
+    if not cur or prev is None or not prev:
+        return False
+    if len(cur) != len(prev):
+        return True
+    cn, cp = _centroid(cur), _centroid(prev)
+    return math.hypot(cn[0] - cp[0], cn[1] - cp[1]) > threshold
 
 
 # --- config loading from the SQLite config store --------------------------
@@ -88,6 +108,7 @@ class LiveRuntime:
         sink: Optional[StateSink] = None,
         sampler=None,
         clock=_now,
+        motion_threshold: float = 8.0,
     ):
         self.venue_id = venue_id
         self.assets = assets
@@ -98,7 +119,9 @@ class LiveRuntime:
         self.sink = sink
         self.sampler = sampler
         self._clock = clock
+        self.motion_threshold = motion_threshold
         self._last_label: dict[str, str] = {}
+        self._prev_points: dict[str, list] = {}
 
     def current_snapshots(self) -> list[AssetSnapshot]:
         return [self.engine.snapshot(a) for a in self.assets]
@@ -128,8 +151,12 @@ class LiveRuntime:
                            and detection_in_any_polygon(d, sensor.zone_polygons)]
                 present = len(in_zone) > 0
                 conf = max((d.confidence for d in in_zone), default=0.0)
+                cur_points = [ground_point(d.bbox) for d in in_zone]
+                active = _motion(self._prev_points.get(sensor.id), cur_points,
+                                 self.motion_threshold)
+                self._prev_points[sensor.id] = cur_points
                 raw_by_sensor[sensor.id] = RawObservation(
-                    present=present, confidence=conf, count=len(in_zone))
+                    present=present, confidence=conf, count=len(in_zone), active=active)
 
         all_snaps: list[AssetSnapshot] = []
         changed: list[AssetSnapshot] = []

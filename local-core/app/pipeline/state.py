@@ -27,6 +27,8 @@ from .types import (
     ROLE_PRIMARY, ROLE_SUPPORTING,
 )
 
+_NO_OBS = RawObservation(False, 0.0)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -42,14 +44,17 @@ class _AssetState:
     effective_at: str = ""
     present_streak: int = 0
     absent_streak: int = 0
+    activity_still: int = 0
 
 
 class StateEngine:
     def __init__(self, enter_ticks: int = 2, exit_ticks: int = 3,
-                 support_high_conf: float = 0.6, clock=_now):
+                 support_high_conf: float = 0.6, activity_still_ticks: int = 3,
+                 clock=_now):
         self.enter_ticks = enter_ticks
         self.exit_ticks = exit_ticks
         self.support_high_conf = support_high_conf
+        self.activity_still_ticks = activity_still_ticks
         self._clock = clock
         self._states: dict[str, _AssetState] = {}
 
@@ -89,8 +94,16 @@ class StateEngine:
             self._smooth_presence(st, raw_present)
             st.confidence = conf
 
-        # --- activity facet: not computed in M2 ---
-        st.activity = ACTIVITY_UNKNOWN
+        # --- activity facet: movement-based (D-T4) ---
+        if st.presence == PRESENCE_PRESENT:
+            raw_active = any(
+                raw_by_sensor.get(s.id, _NO_OBS).active
+                for s in occ_sensors if source_ok.get(s.source_id, False)
+            )
+            self._smooth_activity(st, raw_active)
+        else:
+            st.activity = ACTIVITY_UNKNOWN
+            st.activity_still = 0
 
         st.label = self._derive_label(st)
         changed = st.label != prev_label
@@ -164,6 +177,19 @@ class StateEngine:
         elif st.presence == PRESENCE_UNKNOWN:
             # before either threshold is met, remain unknown
             pass
+
+    def _smooth_activity(self, st: _AssetState, raw_active: bool) -> None:
+        """Movement -> active immediately; stillness -> inactive only after
+        activity_still_ticks consecutive still reads (avoids flicker between
+        shots). Before that threshold, activity stays as-is (unknown right
+        after arrival, so the asset reads 'Occupied' not a false 'Active')."""
+        if raw_active:
+            st.activity = ACTIVITY_ACTIVE
+            st.activity_still = 0
+        else:
+            st.activity_still += 1
+            if st.activity_still >= self.activity_still_ticks:
+                st.activity = ACTIVITY_INACTIVE
 
     def _derive_label(self, st: _AssetState) -> str:
         # health takes display priority — a broken camera never shows a
