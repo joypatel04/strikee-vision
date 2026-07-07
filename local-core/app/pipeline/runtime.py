@@ -116,8 +116,10 @@ class LiveRuntime:
         snooker_detector: Optional[Detector] = None,
         min_game_sec: float = 0.0,
         max_game_sec: float = 2700.0,
-        rack_red_threshold: int = 10,
+        rack_red_threshold: int = 8,
         rerack_jump: int = 6,
+        rerack_low_band: int = 2,
+        rerack_high_band: int = 7,
     ):
         self.venue_id = venue_id
         self.assets = assets
@@ -140,7 +142,8 @@ class LiveRuntime:
             if any(s.kind == SNOOKER_KIND for s in asset.sensors):
                 self._game_trackers[asset.id] = SnookerGameTracker(
                     min_game_sec=min_game_sec, max_game_sec=max_game_sec,
-                    rack_red_threshold=rack_red_threshold, rerack_jump=rerack_jump)
+                    rack_red_threshold=rack_red_threshold, rerack_jump=rerack_jump,
+                    rerack_low_band=rerack_low_band, rerack_high_band=rerack_high_band)
 
         # map each asset to its primary (or first) source, for snapshots
         self._asset_source: dict[str, str] = {}
@@ -299,8 +302,10 @@ def build_live_runtime(
     snooker_detector: Optional[Detector] = None,
     min_game_sec: float = 0.0,
     max_game_sec: float = 2700.0,
-    rack_red_threshold: int = 10,
+    rack_red_threshold: int = 8,
     rerack_jump: int = 6,
+    rerack_low_band: int = 2,
+    rerack_high_band: int = 7,
 ) -> LiveRuntime:
     assets, sources = load_venue_config(db, venue_id)
     frame_sources = {}
@@ -311,4 +316,5 @@ def build_live_runtime(
                        engine, sink, sampler, motion_threshold=motion_threshold,
                        snooker_detector=snooker_detector,
                        min_game_sec=min_game_sec, max_game_sec=max_game_sec,
-                       rack_red_threshold=rack_red_threshold, rerack_jump=rerack_jump)
+                       rack_red_threshold=rack_red_threshold, rerack_jump=rerack_jump,
+                       rerack_low_band=rerack_low_band, rerack_high_band=rerack_high_band)

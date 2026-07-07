@@ -97,6 +97,8 @@ class RuntimeManager:
         max_game = float(os.environ.get("STRIKEE_MAX_GAME_MIN", "120")) * 60.0
         rack_reds = int(os.environ.get("STRIKEE_RACK_REDS", "8"))
         rerack_jump = int(os.environ.get("STRIKEE_RERACK_JUMP", "6"))
+        rerack_low = int(os.environ.get("STRIKEE_RERACK_LOW", "2"))
+        rerack_high = int(os.environ.get("STRIKEE_RERACK_HIGH", "7"))
         kinds = self._venue_sensor_kinds(venue_id)
 
         def _build():
@@ -108,6 +110,7 @@ class RuntimeManager:
                 engine=engine, sink=sink, sampler=sampler, motion_threshold=motion,
                 snooker_detector=snooker, min_game_sec=min_game, max_game_sec=max_game,
                 rack_red_threshold=rack_reds, rerack_jump=rerack_jump,
+                rerack_low_band=rerack_low, rerack_high_band=rerack_high,
             )
 
         rt = await asyncio.to_thread(_build)

@@ -50,6 +50,7 @@ class SnookerGameTracker:
     def __init__(self, confirm_ticks: int = 2, end_hold_ticks: int = 2,
                  restart_confirm_ticks: int = 2, rack_red_threshold: int = 8,
                  rerack_jump: int = 6, floor_confirm_ticks: int = 2,
+                 rerack_low_band: int = 2, rerack_high_band: int = 7,
                  min_game_sec: float = 0.0, max_game_sec: float = 7200.0):
         self.confirm_ticks = confirm_ticks
         self.end_hold_ticks = end_hold_ticks
@@ -68,9 +69,15 @@ class SnookerGameTracker:
         # only lower the floor after this many CONSECUTIVE lower reads, so a
         # brief run of missed-ball frames can't drag the floor down.
         self.floor_confirm_ticks = floor_confirm_ticks
+        # Check B (low->high bands): the game reached a clear LOW red level, then
+        # reds are clearly HIGH again. A second, independent re-rack signal.
+        self.rerack_low_band = rerack_low_band
+        self.rerack_high_band = rerack_high_band
         self._red_floor: Optional[int] = None
         self._rerack_streak = 0
         self._floor_low_streak = 0
+        self._saw_low = False          # has this game reached the low band?
+        self._low_band_streak = 0
         self.min_game_sec = min_game_sec        # ignore end signals before this
         self.max_game_sec = max_game_sec        # force-end after this
         self.state = SEARCH
@@ -109,11 +116,25 @@ class SnookerGameTracker:
                     self._floor_low_streak = 0
             else:
                 self._floor_low_streak = 0
-            # RE-RACK: reds jumped back up to a full rack from the low point ->
-            # the previous game ended (possibly conceded mid-way) and a new one
-            # started. Caught here, before the normal end phase.
-            if red_count >= self.rack_red_threshold \
-                    and red_count >= self._red_floor + self.rerack_jump:
+
+            # has the game clearly reached a LOW red level? (confirmed)
+            if red_count <= self.rerack_low_band:
+                self._low_band_streak += 1
+                if self._low_band_streak >= self.floor_confirm_ticks:
+                    self._saw_low = True
+            else:
+                self._low_band_streak = 0
+
+            # RE-RACK via TWO independent checks (either flags a new game):
+            #  A) sudden RISE: a rack now, clearly above the game's low point
+            #     (catches a mid-game concession — reds only part-potted).
+            #  B) LOW->HIGH bands: the game reached a clear low, and reds are now
+            #     clearly high again (catches a clean end -> re-rack, even when a
+            #     tight fresh triangle is undercounted to only a few reds).
+            rerack_by_jump = (red_count >= self.rack_red_threshold
+                              and red_count >= self._red_floor + self.rerack_jump)
+            rerack_by_bands = self._saw_low and red_count >= self.rerack_high_band
+            if rerack_by_jump or rerack_by_bands:
                 self._rerack_streak += 1
                 if self._rerack_streak >= self.restart_confirm_ticks:
                     events.append(self._end_game(ts))
@@ -174,6 +195,8 @@ class SnookerGameTracker:
         self._red_floor = None            # fresh rack -> reset the low-point
         self._rerack_streak = 0
         self._floor_low_streak = 0
+        self._saw_low = False
+        self._low_band_streak = 0
         return GameEvent("game_start", ts, self.game_number)
 
     def _end_game(self, ts: str) -> GameEvent:

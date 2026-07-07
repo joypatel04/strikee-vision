@@ -27,10 +27,14 @@ So at the club you need **no internet** — only the camera.
   **lingering rack is not double-counted** (while a game is running, new rack
   detections are ignored). A game **ends** from the red-ball trajectory (reds
   clear to colours, then to none), then it waits for a player before the next
-  game. A **mid-game re-rack** (a player concedes and all balls are brought back
-  — reds suddenly jump back up) is counted as a new game, and single-frame
-  detection dropouts are ignored so they don't fake one. Each game is logged with
-  a **snapshot + start/end time + duration** for staff reconciliation.
+  game. A **re-rack** (a new game is set up mid-play — e.g. a player concedes and all
+  balls are brought back) is counted as a new game, detected by **two
+  independent checks**: (A) reds **jump up** clearly from the game's low point,
+  and (B) the game reached a **clear low** then reds are **clearly high** again.
+  Either one flags it — so an undercounted tight triangle still counts. Normal
+  detection wobble (a frame misses a few balls, the next re-finds them) and
+  single-frame dropouts are ignored so they don't fake a re-rack. Each game is
+  logged with a **snapshot + start/end time + duration** for staff reconciliation.
 
 > ⚠️ **Most important lesson from testing:** ball detection needs a
 > **good-quality stream**. Heavy compression destroys the small balls. Use the
@@ -139,7 +143,8 @@ best-effort upload each snapshot to S3.
 | Table goes Available during a long player pause | `STRIKEE_EXIT_TICKS` | raise it — this is the **no-play window** before a table frees up (e.g. 8–20 ≈ 1–2 min at a 7s tick) |
 | Table stays "in use" too long after players leave | `STRIKEE_EXIT_TICKS` | lower it |
 | Games over/under-counted | `STRIKEE_RACK_REDS` | reds needed to treat as a new rack (default 10; raise to be stricter) |
-| Mid-game re-rack (concession then new rack) missed / false | `STRIKEE_RERACK_JUMP` | how big a red-count jump counts as a re-rack (default 6; raise to be stricter) |
+| Re-rack (Check A) missed / false | `STRIKEE_RERACK_JUMP` | how big a red-count jump = a re-rack (default 6; raise to be stricter) |
+| Re-rack (Check B) bands | `STRIKEE_RERACK_LOW` / `STRIKEE_RERACK_HIGH` | the "clearly low" and "clearly high" red counts for the second check (defaults 2 / 7 — set HIGH to what a fresh rack actually detects as) |
 | Two quick frames merged into one game | `STRIKEE_MIN_GAME_MIN` | the min game window — raise to suppress spurious quick restarts (your 15-min idea) |
 | A stuck/abandoned game never ends | `STRIKEE_MAX_GAME_MIN` | pure safety net — force-end after this many minutes (default **120**, well beyond any real frame, so a long game is never cut short). Raise if you ever have longer sessions. |
 | Missed racks | sensor confidence | lower `conf_threshold`; use the main stream |

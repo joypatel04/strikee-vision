@@ -146,7 +146,7 @@ def test_missed_ball_wobble_is_not_a_rerack():
 
 def test_clear_low_to_full_rack_is_a_rerack():
     """A genuine end→re-rack (reds fall to ~2, then a full rack returns) IS a
-    new game — the low/high separation is clear."""
+    new game — caught by Check A (sudden rise)."""
     tr = SnookerGameTracker(confirm_ticks=2, rack_red_threshold=8, rerack_jump=6,
                             restart_confirm_ticks=2)
     start_a_game(tr)
@@ -155,6 +155,23 @@ def test_clear_low_to_full_rack_is_a_rerack():
     tr.update(ts(70), 13, True, False, False)           # full rack back
     ev = tr.update(ts(80), 13, True, False, False)
     assert [e.kind for e in ev] == ["game_end", "game_start"]
+    assert tr.game_number == 2
+
+
+def test_check_B_catches_undercounted_rack_that_check_A_misses():
+    """Two-check payoff: after a confirmed low, a tight fresh rack detected as
+    only 7 reds is a new game via Check B (low->high bands) even though Check A
+    (needs >= 8 reds) would miss it."""
+    tr = SnookerGameTracker(confirm_ticks=2, rack_red_threshold=8, rerack_jump=6,
+                            rerack_low_band=2, rerack_high_band=7,
+                            floor_confirm_ticks=2, restart_confirm_ticks=2)
+    start_a_game(tr)
+    for t, r in [(30, 6), (40, 3), (50, 2), (60, 2)]:   # reach a CONFIRMED low
+        tr.update(ts(t), r, True, False, False)
+    # a tight rack undercounted to just 7 reds (< Check A's 8) comes back
+    tr.update(ts(70), 7, True, False, False)
+    ev = tr.update(ts(80), 7, True, False, False)
+    assert [e.kind for e in ev] == ["game_end", "game_start"]   # via Check B
     assert tr.game_number == 2
 
 
