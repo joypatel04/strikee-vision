@@ -1,51 +1,54 @@
-:root {
-  --bg: #0d1117;
-  --panel: #12161c;
-  --border: #232833;
-  --text: #e6e9ef;
-  --muted: #8b93a1;
-  --green: #22c55e;
-  --red: #ef4444;
-  --amber: #f0b429;
-  --accent: #60a5fa;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 9% 6%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 5%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 152 66% 46%;
+    --primary-foreground: 150 90% 6%;
+    --secondary: 240 4% 13%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 4% 13%;
+    --muted-foreground: 240 5% 65%;
+    --accent: 240 5% 15%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 152 66% 46%;
+    --success-foreground: 150 90% 6%;
+    --warning: 38 92% 55%;
+    --warning-foreground: 40 90% 8%;
+    --border: 240 5% 14%;
+    --input: 240 5% 16%;
+    --ring: 152 66% 46%;
+    --radius: 0.75rem;
+    --chart-1: 152 66% 46%;
+    --chart-2: 217 91% 60%;
+    --chart-3: 38 92% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 0 72% 55%;
+  }
 }
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
-body {
-  background: var(--bg);
-  color: var(--text);
-  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+@layer base {
+  * { @apply border-border; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    /* subtle top glow so it doesn't feel flat */
+    background-image:
+      radial-gradient(60rem 40rem at 80% -10%, hsl(152 66% 46% / 0.07), transparent 60%),
+      radial-gradient(50rem 30rem at 0% 0%, hsl(217 91% 60% / 0.05), transparent 55%);
+    background-attachment: fixed;
+  }
 }
-a { color: var(--accent); text-decoration: none; }
-header {
-  display: flex; align-items: center; gap: 14px;
-  padding: 12px 20px; border-bottom: 1px solid var(--border);
-}
-header h1 { font-size: 15px; margin: 0; font-weight: 600; }
-header .spacer { flex: 1; }
-main { padding: 20px; max-width: 1100px; margin: 0 auto; }
-.muted { color: var(--muted); }
-.card {
-  background: var(--panel); border: 1px solid var(--border);
-  border-radius: 10px; padding: 16px; margin-bottom: 16px;
-}
-.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
-input, select, button {
-  background: #0b0e13; color: var(--text);
-  border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; font-size: 14px;
-}
-button { cursor: pointer; background: var(--accent); color: #06131f; border: none; font-weight: 600; }
-button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
-th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .04em; }
-.num { text-align: right; font-variant-numeric: tabular-nums; }
-.pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); }
-.ok { color: var(--green); border-color: #245e37; }
-.leak { color: var(--red); border-color: #7f1d1d; }
-.warn { color: var(--amber); border-color: #6b551b; }
-.login-wrap { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
-.login-card { width: 320px; }
-.error { color: var(--red); font-size: 13px; margin-top: 8px; }
-h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 12px; }
+
+/* thin, modern scrollbars */
+* { scrollbar-width: thin; scrollbar-color: hsl(var(--border)) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 999px; }
