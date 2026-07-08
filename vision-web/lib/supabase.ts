@@ -73,8 +73,37 @@ export async function billedByFacility(
   return out;
 }
 
-/** Whole-venue revenue for a date (context number). */
-export async function venueRevenue(shopId: number, date: string): Promise<number> {
-  const byFac = await billedByFacility(shopId, date);
-  return Object.values(byFac).reduce((s, f) => s + f.revenue, 0);
+export interface Cashbook {
+  cashInHand: number;
+  upiCardNet: number;
+  todaysBalance: number;
+  credit: number;
+  moneyIn: number;
+  moneyOut: number;
+  entries: number;
+}
+
+/** Authoritative money for a business day — the SAME numbers the Strikee
+ * Cashbook shows (nets payment methods, credit, add-ons, refunds). Uses the
+ * shop's own reporting RPC so it can't drift from the POS. */
+export async function cashbookTotal(shopId: number, date: string): Promise<Cashbook | null> {
+  if (!hasSupabase()) return null;
+  const { startUtc, endUtc } = businessDayUtcRange(date);
+  const { data, error } = await admin().rpc("get_cashbook_total_v_next", {
+    start_date: startUtc,
+    end_date: endUtc,
+    p_shop_id: shopId,
+  });
+  if (error || !data) return null;
+  const r = Array.isArray(data) ? data[0] : data;
+  if (!r) return null;
+  return {
+    cashInHand: Number(r.cash_in_hand ?? 0),
+    upiCardNet: Number(r.upi_card_online_net ?? 0),
+    todaysBalance: Number(r.todays_balance ?? 0),
+    credit: Number(r.credit_amount ?? 0),
+    moneyIn: Number(r.money_in ?? 0),
+    moneyOut: Number(r.money_out ?? 0),
+    entries: Number(r.number_of_entries ?? 0),
+  };
 }

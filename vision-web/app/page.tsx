@@ -1,7 +1,7 @@
 import Link from "next/link";
 import {
-  IndianRupee, Target, ReceiptText, TriangleAlert,
-  ArrowRight, Radio, CircleCheck, PlugZap,
+  Wallet, Banknote, CreditCard, HandCoins,
+  ArrowRight, Radio, CircleCheck, PlugZap, Target,
 } from "lucide-react";
 import Topbar from "./_components/Topbar";
 import { StatCard } from "./_components/StatCard";
@@ -14,7 +14,8 @@ import {
   Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { reconcile } from "@/lib/reconcile";
-import { hasSupabase, hasTurso, currentBusinessDate } from "@/lib/config";
+import { cashbookTotal } from "@/lib/supabase";
+import { SHOP_ID, hasSupabase, hasTurso, currentBusinessDate } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 
@@ -27,9 +28,8 @@ export default async function Dashboard({
 }) {
   const today = currentBusinessDate();
   const date = searchParams.date || today;
-  const r = await reconcile(date);
+  const [r, cash] = await Promise.all([reconcile(date), cashbookTotal(SHOP_ID, date)]);
   const configured = hasTurso() && hasSupabase();
-  const leaks = r.rows.filter((x) => x.status === "leak").length;
 
   return (
     <>
@@ -47,17 +47,17 @@ export default async function Dashboard({
           <DateNav date={date} today={today} />
         </div>
 
-        {/* KPI cards */}
+        {/* KPI cards — the SAME figures as the Strikee cashbook */}
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <StatCard label="Revenue (billed)" value={inr(r.totals.revenue)} icon={IndianRupee} tone="success" sub={`${date}`} />
-          <StatCard label="Games tracked" value={r.totals.trackedGames} icon={Target} sub="detected by camera" />
-          <StatCard label="Games billed" value={r.totals.billedGames} icon={ReceiptText} sub="entered in Strikee" />
+          <StatCard label="Today's balance" value={inr(cash?.todaysBalance ?? 0)} icon={Wallet} tone="success" sub="cash + UPI/card collected" />
+          <StatCard label="Cash in hand" value={inr(cash?.cashInHand ?? 0)} icon={Banknote} />
+          <StatCard label="UPI / Card" value={inr(cash?.upiCardNet ?? 0)} icon={CreditCard} />
           <StatCard
-            label="Unbilled gap"
-            value={r.totals.gap > 0 ? `+${r.totals.gap}` : r.totals.gap}
-            icon={TriangleAlert}
-            tone={r.totals.gap > 0 ? "warning" : "default"}
-            sub={leaks > 0 ? `${leaks} table${leaks > 1 ? "s" : ""} flagged` : "tracked − billed"}
+            label="Credit used"
+            value={inr(cash?.credit ?? 0)}
+            icon={HandCoins}
+            tone={(cash?.credit ?? 0) > 0 ? "warning" : "default"}
+            sub="unpaid tabs"
           />
         </div>
 
@@ -100,9 +100,18 @@ export default async function Dashboard({
         {r.mapped && (
           <div className="grid gap-6 lg:grid-cols-5">
             <Card className="lg:col-span-3">
-              <CardHeader>
-                <CardTitle className="text-base">Per table · {date}</CardTitle>
-                <CardDescription>Detected vs billed games, and the gap.</CardDescription>
+              <CardHeader className="flex-row items-start justify-between space-y-0">
+                <div className="space-y-1">
+                  <CardTitle className="text-base">Games by table</CardTitle>
+                  <CardDescription>Detected vs billed · {date}</CardDescription>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge variant="outline"><Target className="h-3 w-3" /> {r.totals.trackedGames} tracked</Badge>
+                  <Badge variant="outline">{r.totals.billedGames} billed</Badge>
+                  <Badge variant={r.totals.gap > 0 ? "warning" : "success"}>
+                    gap {r.totals.gap > 0 ? `+${r.totals.gap}` : r.totals.gap}
+                  </Badge>
+                </div>
               </CardHeader>
               <CardContent className="p-0">
                 <Table>
@@ -113,7 +122,6 @@ export default async function Dashboard({
                       <TableHead className="text-right">Billed</TableHead>
                       <TableHead className="text-right">Gap</TableHead>
                       <TableHead className="text-right">In use</TableHead>
-                      <TableHead className="text-right">Revenue</TableHead>
                       <TableHead className="text-right">Flag</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -129,7 +137,6 @@ export default async function Dashboard({
                         <TableCell className="text-right tabular-nums text-muted-foreground">
                           {row.inUseMinutes}m
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">{inr(row.revenue)}</TableCell>
                         <TableCell className="text-right">
                           {row.status === "leak" && <Badge variant="destructive">played &gt; billed</Badge>}
                           {row.status === "over" && <Badge variant="warning">billed &gt; tracked</Badge>}
@@ -149,7 +156,6 @@ export default async function Dashboard({
                         {r.totals.gap > 0 ? `+${r.totals.gap}` : r.totals.gap}
                       </TableCell>
                       <TableCell />
-                      <TableCell className="text-right tabular-nums font-semibold">{inr(r.totals.revenue)}</TableCell>
                       <TableCell />
                     </TableRow>
                   </TableFooter>
