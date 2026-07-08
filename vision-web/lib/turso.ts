@@ -69,12 +69,17 @@ export async function inUseMinutesByAsset(date: string): Promise<Record<string, 
   }
 }
 
-/** Cloud-sync freshness proxy: newest event timestamp we have. */
-export async function latestEventTs(): Promise<string | null> {
+/** Cloud-sync freshness: newest heartbeat we have. Metric samples are written
+ * every tick while the box runs, so their max ts tracks "box alive + syncing"
+ * (not just the last game). Falls back to events. */
+export async function latestActivityTs(): Promise<string | null> {
   if (!hasTurso()) return null;
   try {
-    const rs = await client().execute("SELECT MAX(ts) AS t FROM events");
-    return rs.rows[0]?.t ? String(rs.rows[0].t) : null;
+    const rs = await client().execute("SELECT MAX(ts) AS t FROM metric_samples");
+    const t = rs.rows[0]?.t ? String(rs.rows[0].t) : null;
+    if (t) return t;
+    const rs2 = await client().execute("SELECT MAX(ts) AS t FROM events");
+    return rs2.rows[0]?.t ? String(rs2.rows[0].t) : null;
   } catch {
     return null;
   }

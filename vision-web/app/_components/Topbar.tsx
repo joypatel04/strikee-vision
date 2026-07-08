@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Crosshair, LayoutDashboard, Settings, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import SyncChip from "./SyncChip";
 
 const nav = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -56,6 +57,7 @@ export default function Topbar() {
         </nav>
 
         <div className="flex-1" />
+        <SyncChip />
         <Button variant="ghost" size="sm" onClick={logout} className="text-muted-foreground">
           <LogOut className="h-4 w-4" />
           Sign out
