@@ -52,6 +52,8 @@ def start_server_thread(server):
 
 
 def main() -> None:
+    from .platform_env import harden
+    harden()
     port = int(os.environ.get("STRIKEE_PORT", "8760"))
     app = create_app()
     server = make_server(app, HOST, port)
@@ -60,6 +62,20 @@ def main() -> None:
         raise RuntimeError("Local Core server did not start")
 
     url = f"http://{HOST}:{port}/"
+
+    # Headless: run the server only, no window/browser. This is the mode for
+    # auto-start on boot (Task Scheduler / service) where there may be no
+    # interactive desktop — staff just open the dashboard URL when they want it.
+    if os.environ.get("STRIKEE_HEADLESS"):
+        print(f"Strikee Vision — Local Core running headless at {url}")
+        try:
+            while thread.is_alive():
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            pass
+        server.should_exit = True
+        return
+
     try:
         import webview  # pywebview
         webview.create_window("Strikee Vision — Local Core", url,

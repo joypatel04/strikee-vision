@@ -20,5 +20,18 @@ frame.jpg
 # Spike run outputs
 runs/
 
+# Node / Next.js (vision-web)
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+.vercel/
+
+# Secrets / local env (never commit)
+.env
+.env.*
+!.env.example
+
 # OS
 .DS_Store

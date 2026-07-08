@@ -59,6 +59,7 @@
     <span class="dot" id="dot"></span>
     <h1>Strikee Vision — Local Core</h1>
     <span class="muted" id="version"></span>
+    <span class="badge" id="syncBadge" title="cloud sync health" style="display:none"></span>
     <div class="spacer"></div>
     <select id="venueSelect"></select>
     <button id="startBtn">Start pipeline</button>
@@ -146,6 +147,27 @@
       const s = await (await fetch(`/api/venues/${currentVenue}/pipeline/status`)).json();
       document.getElementById('statusbar').textContent =
         `pipeline: ${s.running ? 'running' : 'stopped'} · assets ${s.assets} · sources ${s.sources} · every ${s.interval_sec}s`;
+    }
+
+    async function refreshSync() {
+      const el = document.getElementById('syncBadge');
+      let s;
+      try { s = await (await fetch('/api/sync-health')).json(); }
+      catch { return; }
+      if (!s.sync_enabled) { el.style.display = 'none'; return; }  // local-only: hide
+      el.style.display = '';
+      const age = s.seconds_since_sync;
+      const ago = age == null ? 'never' :
+        (age < 90 ? `${Math.round(age)}s ago` : `${Math.round(age/60)}m ago`);
+      if (s.healthy) {
+        el.textContent = `☁ synced ${ago}`;
+        el.style.color = '#22c55e'; el.style.borderColor = '#245e37';
+        el.title = `cloud sync OK · ${s.sync_count} syncs · last ${s.last_success_at || '—'}`;
+      } else {
+        el.textContent = `⚠ NOT syncing (${ago})`;
+        el.style.color = '#ef4444'; el.style.borderColor = '#7f1d1d';
+        el.title = `sync stalled · ${s.consecutive_failures} fails · ${s.last_error || 'no successful sync yet'}`;
+      }
     }
 
     const assetName = (id) => (assets[id] && assets[id].name) || id?.slice(0, 6) || '—';
@@ -275,7 +297,8 @@
       if (venues.length) selectVenue(venues[0].id);
       else document.getElementById('empty').textContent =
         'No venues yet. Create one via POST /api/venues (see /docs).';
-      setInterval(() => { refreshStatus(); loadSessions(); loadEvents(); loadAnalytics(); loadNotifications(); loadGames(); }, 5000);
+      refreshSync();
+      setInterval(() => { refreshStatus(); refreshSync(); loadSessions(); loadEvents(); loadAnalytics(); loadNotifications(); loadGames(); }, 5000);
     }
     init();
   </script>

@@ -1,0 +1,26 @@
+{
+  "name": "strikee-vision-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private reconciliation dashboard: Strikee Vision tracking (Turso) vs Strikee POS (Supabase).",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "jose": "^5.9.0",
+    "next": "^14.2.35",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -94,3 +94,83 @@ class OpenCVFrameSource:
         if self._cap is not None:
             self._cap.release()
             self._cap = None
+
+
+def grab_once(uri: str, flush: int = 4, max_reads: int = 60) -> tuple[bool, Frame]:
+    """Open a stream, pull one fresh frame, and close it — a short-lived
+    'rotating' grab. Used by the capture scheduler so that only K connections
+    are ever open at once (each worker holds one for ~1.7s, then releases it).
+
+    Tries OpenCV first; if that can't decode the stream (some Windows OpenCV
+    builds struggle with HEVC/H.265 RTSP), falls back to an ffmpeg subprocess.
+    Returns (ok, frame). ok=False if neither path yields a frame.
+    """
+    ok, frame = _grab_cv2(uri, flush, max_reads)
+    if ok:
+        return ok, frame
+    return _grab_ffmpeg(uri)
+
+
+def _grab_cv2(uri: str, flush: int, max_reads: int) -> tuple[bool, Frame]:
+    import cv2  # lazy
+
+    cap = None
+    try:
+        if str(uri).isdigit():
+            cap = cv2.VideoCapture(int(uri))
+        else:
+            cap = cv2.VideoCapture(uri, cv2.CAP_FFMPEG)
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+        if not cap.isOpened():
+            return False, None
+        # HEVC RTSP needs a keyframe before it decodes; pull until a real frame.
+        for _ in range(max_reads):
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                for _ in range(flush):        # drop buffered/stale frames
+                    cap.grab()
+                ok2, fresh = cap.retrieve()
+                return (True, fresh) if ok2 and fresh is not None else (True, frame)
+        return False, None
+    except Exception:
+        return False, None
+    finally:
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+
+
+def _grab_ffmpeg(uri: str, timeout: float = 20.0) -> tuple[bool, Frame]:
+    """Fallback grab via a one-shot ffmpeg subprocess (writes a single JPEG,
+    then we read it back). Needs ffmpeg on PATH; if it's absent this simply
+    returns (False, None). Proven on the club DVR's HEVC streams."""
+    import os
+    import subprocess
+    import tempfile
+
+    if str(uri).isdigit():
+        return False, None                     # webcams: cv2 only
+    fd, path = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-rtsp_transport", "tcp",
+             "-i", uri, "-frames:v", "1", path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+        if r.returncode == 0 and os.path.exists(path) and os.path.getsize(path) > 0:
+            import cv2
+            frame = cv2.imread(path)
+            return (frame is not None), frame
+        return False, None
+    except Exception:
+        return False, None
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass

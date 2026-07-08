@@ -34,12 +34,13 @@ class RuntimeManager:
         self._model = model
         self._runtimes: dict[str, LiveRuntime] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        self._pools: dict[str, object] = {}   # venue_id -> ThreadedCapturePool
 
     def get(self, venue_id: str) -> Optional[LiveRuntime]:
         return self._runtimes.get(venue_id)
 
     def is_running(self, venue_id: str) -> bool:
-        return venue_id in self._tasks
+        return venue_id in self._tasks or venue_id in self._pools
 
     def status(self, venue_id: str) -> dict:
         rt = self._runtimes.get(venue_id)
@@ -50,6 +51,7 @@ class RuntimeManager:
             "sources": len(rt.sources) if rt else 0,
             "viewers": self._bcast.count(venue_id),
             "interval_sec": self._interval,
+            "scheduled": venue_id in self._pools,
         }
 
     def _venue_sensor_kinds(self, venue_id: str) -> set:
@@ -67,9 +69,12 @@ class RuntimeManager:
         if self.is_running(venue_id):
             return self.status(venue_id)
         try:
-            from .capture import OpenCVFrameSource
+            from .capture import OpenCVFrameSource, grab_once
             from .observe import PERSON_KINDS, SNOOKER_KIND
             from .perception import SnookerDetector, YOLODetector
+            from .scheduler import (
+                CaptureSchedule, ThreadedCapturePool, source_intervals,
+            )
         except Exception as exc:  # pragma: no cover - import guard
             raise PerceptionUnavailable(
                 "Perception extra not installed. Run: pip install -e '.[perception]'"
@@ -106,12 +111,19 @@ class RuntimeManager:
             from ..debuglog import DebugLog
             debug_log = DebugLog(os.environ.get("STRIKEE_DEBUG_FILE", f"debug_{venue_id}.csv"))
 
+        # scheduled capture (default): the pool grabs frames within the K-stream
+        # budget, so no persistent per-source connection. STRIKEE_SCHEDULER=0
+        # falls back to the legacy tick loop (persistent connections — only safe
+        # when #cameras <= the DVR's concurrent limit).
+        scheduled = os.environ.get("STRIKEE_SCHEDULER", "1") != "0"
+
         def _build():
             person = YOLODetector(person_model) if (kinds & PERSON_KINDS) else None
             snooker = SnookerDetector(snooker_model) if (SNOOKER_KIND in kinds) else None
+            factory = None if scheduled else (lambda s: OpenCVFrameSource(s.id, s.uri))
             return build_live_runtime(
                 self._db, venue_id, person,
-                source_factory=lambda s: OpenCVFrameSource(s.id, s.uri),
+                source_factory=factory,
                 engine=engine, sink=sink, sampler=sampler, motion_threshold=motion,
                 snooker_detector=snooker, min_game_sec=min_game, max_game_sec=max_game,
                 rack_red_threshold=rack_reds, rerack_jump=rerack_jump,
@@ -120,8 +132,47 @@ class RuntimeManager:
             )
 
         rt = await asyncio.to_thread(_build)
-        self.run_runtime(venue_id, rt)
+        if scheduled:
+            self._start_scheduler(venue_id, rt, CaptureSchedule,
+                                  ThreadedCapturePool, source_intervals, grab_once)
+        else:
+            self.run_runtime(venue_id, rt)
         return self.status(venue_id)
+
+    def _start_scheduler(self, venue_id, rt, CaptureSchedule, ThreadedCapturePool,
+                         source_intervals, grab_once) -> None:
+        """Run a venue's capture on the K-slot rotating scheduler. Each grabbed
+        frame is processed for its source and the changed snapshots are bridged
+        back to the async broadcaster."""
+        k = int(os.environ.get("STRIKEE_MAX_STREAMS", "3"))
+        intervals = source_intervals(
+            rt.sources,
+            table=float(os.environ.get("STRIKEE_RATE_TABLE", "13")),
+            gaming=float(os.environ.get("STRIKEE_RATE_GAMING", "5")),
+            entry=float(os.environ.get("STRIKEE_RATE_ENTRY", "3")),
+        )
+        if not intervals:
+            # nothing grabbable (no uris) — register for serving state only
+            self.set_runtime(venue_id, rt)
+            return
+        uris = {s.id: s.uri for s in rt.sources if s.uri and s.id in intervals}
+        src_by_id = {s.id: s for s in rt.sources}
+        loop = asyncio.get_running_loop()
+
+        def on_frame(sid, ok, frame):
+            src = src_by_id.get(sid)
+            if src is None:
+                return
+            _all, changed = rt.process_and_evaluate(src, ok, frame)
+            if changed:
+                asyncio.run_coroutine_threadsafe(
+                    self._bcast.broadcast(venue_id, changed), loop)
+
+        schedule = CaptureSchedule(intervals, max_concurrent=k)
+        pool = ThreadedCapturePool(schedule, uris, grab_once, on_frame)
+        self._runtimes[venue_id] = rt
+        self._pools[venue_id] = pool
+        pool.start()
 
     def run_runtime(self, venue_id: str, runtime: LiveRuntime) -> None:
         """Register a runtime and spawn its tick loop (used by start() and tests)."""
@@ -151,11 +202,14 @@ class RuntimeManager:
                 await task
             except asyncio.CancelledError:
                 pass
+        pool = self._pools.pop(venue_id, None)
+        if pool:
+            await asyncio.to_thread(pool.stop)
         rt = self._runtimes.pop(venue_id, None)
         if rt:
             rt.release()
         return {"venue_id": venue_id, "running": False}
 
     async def stop_all(self) -> None:
-        for venue_id in list(self._tasks.keys()):
+        for venue_id in list(set(self._tasks) | set(self._pools)):
             await self.stop(venue_id)

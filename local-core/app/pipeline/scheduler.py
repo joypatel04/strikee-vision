@@ -1,0 +1,208 @@
+"""Capture scheduler — runs many cameras through a small, fixed budget of
+concurrent connections without ever exceeding it.
+
+The DVR only tolerates a few simultaneous main-stream connections (measured
+K=3 on the club's Dahua). But each camera needs a *different* sampling rate:
+entry/footfall cameras every ~3s, gaming-zone cameras every ~5s, snooker
+tables every ~12-15s. So we can't hold one persistent connection per camera.
+
+`CaptureSchedule` is the pure policy: given each source's target interval and a
+concurrency cap K, it decides *which source to grab next*, always picking the
+most-overdue one and never letting more than K be in flight at once. It is
+clock-injectable and has no threads, so it is deterministically testable.
+
+`ThreadedCapturePool` is the thin runtime around it: K worker threads that each
+claim the next due source, grab one frame (a short-lived open→read→close, so at
+most K connections are ever open), and hand it to a processing callback.
+"""
+from __future__ import annotations
+
+import threading
+import time
+from typing import Callable, Optional
+
+# sensor kinds → capture priority. Snooker tables sample slowly (a game is a
+# slow signal); footfall/entry cameras fast (people cross in seconds); other
+# people cameras (gaming zone) in between. See the measured K=3 budget: at
+# ~1.7s/grab, 3 lanes ≈ 106 grabs/min, and entries 3s + gaming 5s + tables
+# 12-15s fits inside it.
+_SNOOKER_KIND = "snooker_game"
+_ENTRY_KINDS = {"footfall", "entry"}
+_PERSON_KINDS = {"occupancy", "presence", "person"}
+
+
+def source_intervals(
+    sources, table: float = 13.0, gaming: float = 5.0, entry: float = 3.0,
+    default: float = 5.0,
+) -> dict[str, float]:
+    """Map each source (with a uri) to its target grab interval by sensor kind.
+    Sources with no uri can't be grabbed and are skipped."""
+    out: dict[str, float] = {}
+    for src in sources:
+        if not getattr(src, "uri", None):
+            continue
+        kinds = {s.kind for s in src.sensors}
+        if _SNOOKER_KIND in kinds:
+            iv = table
+        elif kinds & _ENTRY_KINDS:
+            iv = entry
+        elif kinds & _PERSON_KINDS:
+            iv = gaming
+        else:
+            iv = default
+        out[src.id] = iv
+    return out
+
+
+class CaptureSchedule:
+    """Decides the next camera to grab, honouring per-source target intervals
+    and a hard concurrency cap. Pure and thread-safe; no I/O.
+
+    Intervals are measured from the *start* of each grab, so a source with a
+    3s interval is grabbed every 3s (as long as a grab finishes within 3s) —
+    not 3s-plus-grab-time. A source already being grabbed is never handed out
+    again until it completes.
+    """
+
+    def __init__(self, intervals: dict[str, float], max_concurrent: int = 3,
+                 clock: Callable[[], float] = time.monotonic):
+        if max_concurrent < 1:
+            raise ValueError("max_concurrent must be >= 1")
+        self._interval = {sid: float(iv) for sid, iv in intervals.items()}
+        self._k = max_concurrent
+        self._clock = clock
+        self._started_at: dict[str, Optional[float]] = {sid: None for sid in self._interval}
+        self._inflight: set[str] = set()
+        self._lock = threading.Lock()
+
+    @property
+    def max_concurrent(self) -> int:
+        return self._k
+
+    @property
+    def source_ids(self) -> list[str]:
+        return list(self._interval)
+
+    def _ready_at(self, sid: str) -> float:
+        started = self._started_at[sid]
+        return 0.0 if started is None else started + self._interval[sid]
+
+    def due(self, now: Optional[float] = None) -> Optional[str]:
+        """Claim the most-overdue idle source that is due, if under the cap.
+
+        Marks it in-flight and stamps its start time. Returns the source id, or
+        None if the cap is reached or nothing is due yet. Tie-break: most
+        overdue first, then the shortest interval (highest-rate cameras win a
+        tie, so entries beat tables when both come due at once).
+        """
+        if now is None:
+            now = self._clock()
+        with self._lock:
+            if len(self._inflight) >= self._k:
+                return None
+            best: Optional[str] = None
+            best_key = None
+            for sid in self._interval:
+                if sid in self._inflight:
+                    continue
+                ready_at = self._ready_at(sid)
+                if now + 1e-9 < ready_at:
+                    continue  # not due yet
+                key = (-(now - ready_at), self._interval[sid], sid)
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best = sid
+            if best is not None:
+                self._inflight.add(best)
+                self._started_at[best] = now
+            return best
+
+    def complete(self, sid: str, now: Optional[float] = None) -> None:
+        """Mark a grab finished, freeing a concurrency slot."""
+        with self._lock:
+            self._inflight.discard(sid)
+
+    def wait_time(self, now: Optional[float] = None) -> float:
+        """Seconds until the next source is due. 0 if something is due now.
+        A small floor when the cap is full (we're waiting on a completion, not
+        the clock) so callers poll rather than sleep forever."""
+        if now is None:
+            now = self._clock()
+        with self._lock:
+            if len(self._inflight) >= self._k:
+                return 0.05
+            waits = [max(0.0, self._ready_at(sid) - now)
+                     for sid in self._interval if sid not in self._inflight]
+            if not waits:
+                return 0.5
+            return min(waits)
+
+
+class ThreadedCapturePool:
+    """Runs a CaptureSchedule with K worker threads.
+
+    Each worker claims the next due source, grabs one frame via `grab(uri)`
+    (expected to open→read→close, so only one connection per worker exists at a
+    time → at most K open across the pool), then calls `on_frame(source_id, ok,
+    frame)`. Detection/processing inside `on_frame` is serialised behind a lock
+    by default (grabs stay concurrent, but only one frame is processed at a
+    time — safer for the model and cheaper than the grabs anyway).
+    """
+
+    def __init__(
+        self,
+        schedule: CaptureSchedule,
+        uris: dict[str, str],
+        grab: Callable[[str], tuple[bool, object]],
+        on_frame: Callable[[str, bool, object], None],
+        serialize_processing: bool = True,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
+        self._schedule = schedule
+        self._uris = uris
+        self._grab = grab
+        self._on_frame = on_frame
+        self._proc_lock = threading.Lock() if serialize_processing else None
+        self._clock = clock
+        self._sleep = sleep
+        self._stop = threading.Event()
+        self._threads: list[threading.Thread] = []
+
+    def start(self) -> None:
+        if self._threads:
+            return
+        for i in range(self._schedule.max_concurrent):
+            t = threading.Thread(target=self._worker, name=f"capture-{i}", daemon=True)
+            t.start()
+            self._threads.append(t)
+
+    def _worker(self) -> None:
+        while not self._stop.is_set():
+            sid = self._schedule.due()
+            if sid is None:
+                self._sleep(min(0.5, max(0.02, self._schedule.wait_time())))
+                continue
+            ok, frame = False, None
+            try:
+                ok, frame = self._grab(self._uris.get(sid))
+            except Exception:
+                ok, frame = False, None
+            finally:
+                self._schedule.complete(sid)
+            if self._stop.is_set():
+                break
+            try:
+                if self._proc_lock is not None:
+                    with self._proc_lock:
+                        self._on_frame(sid, ok, frame)
+                else:
+                    self._on_frame(sid, ok, frame)
+            except Exception:
+                pass  # one bad frame must never kill a worker
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop.set()
+        for t in self._threads:
+            t.join(timeout=timeout)
+        self._threads = []

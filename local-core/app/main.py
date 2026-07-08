@@ -26,13 +26,98 @@ from .runtime_api import build_runtime_router
 WEB_DIR = Path(__file__).parent.parent / "web"
 
 
+def _maybe_start_backup(db_path: str):
+    """If STRIKEE_BACKUP_EVERY_MIN is set and storage is configured, run a
+    periodic SQLite→R2/S3 backup in the background. Best-effort; returns the
+    task (or None if not enabled) so lifespan can cancel it."""
+    import asyncio
+
+    from .backup import BackupConfig, run_once
+
+    every = os.environ.get("STRIKEE_BACKUP_EVERY_MIN")
+    cfg = BackupConfig.from_env()
+    if not every or not cfg.enabled:
+        return None
+    period = max(60.0, float(every) * 60.0)
+
+    async def _loop():
+        while True:
+            await asyncio.sleep(period)
+            await asyncio.to_thread(run_once, db_path, cfg)
+
+    return asyncio.get_event_loop().create_task(_loop())
+
+
+def _maybe_start_turso_sync(db):
+    """When the DB is on the Turso backend, replicate the local write-ahead
+    changes to the cloud on an interval so the data is queryable from anywhere.
+    Best-effort; never blocks writes (they land locally first)."""
+    import asyncio
+
+    if getattr(db, "backend", "sqlite3") != "turso":
+        return None
+    period = max(5.0, float(os.environ.get("STRIKEE_TURSO_SYNC_SEC", "15")))
+
+    async def _loop():
+        while True:
+            await asyncio.sleep(period)
+            await asyncio.to_thread(db.sync)
+
+    return asyncio.get_event_loop().create_task(_loop())
+
+
+def _autostart_targets(db, spec: str) -> list[str]:
+    """Which venue(s) to auto-start. spec='all' -> every configured venue;
+    otherwise the given venue id."""
+    if spec == "all":
+        with db.cursor() as cur:
+            cur.execute("SELECT id FROM venues")
+            return [r[0] for r in cur.fetchall()]
+    return [spec]
+
+
+async def _run_autostart(runtime, targets: list[str]) -> None:
+    """Start each venue's pipeline unattended. Best-effort: a venue that can't
+    start (e.g. no perception installed yet) is skipped, not fatal."""
+    for venue_id in targets:
+        try:
+            await runtime.start(venue_id)
+        except Exception:
+            pass
+
+
+def _maybe_autostart(app):
+    """If STRIKEE_AUTOSTART_VENUE is set, start the pipeline on boot so the venue
+    runs with NO manual 'Start pipeline' click — turnkey for staff."""
+    import asyncio
+
+    spec = os.environ.get("STRIKEE_AUTOSTART_VENUE")
+    if not spec:
+        return None
+    targets = _autostart_targets(app.state.db, spec)
+    if not targets:
+        return None
+    return asyncio.create_task(_run_autostart(app.state.runtime, targets))
+
+
 def create_app(db_path: str | None = None) -> FastAPI:
+    # Runs before any torch/cv2 import (detectors build lazily on pipeline
+    # start), so the Windows OpenMP/HEVC hardening takes effect.
+    from .platform_env import harden
+    harden()
+
     db_path = db_path or os.environ.get("STRIKEE_DB", "strikee.db")
     interval = float(os.environ.get("STRIKEE_TICK_SEC", "7"))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        backup_task = _maybe_start_backup(db_path)
+        sync_task = _maybe_start_turso_sync(app.state.db)
+        autostart_task = _maybe_autostart(app)
         yield
+        for t in (backup_task, sync_task, autostart_task):
+            if t is not None:
+                t.cancel()
         await app.state.runtime.stop_all()
 
     app = FastAPI(title="Strikee Vision Local Core", version=__version__,
@@ -49,6 +134,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
             "db": app.state.db.path,
             "entities": [s.plural for s in REGISTRY],
         }
+
+    @app.get("/api/sync-health")
+    def sync_health():
+        """Cloud-sync health — the dashboard shows 'synced Xs ago' and warns if
+        tracking data stops reaching the cloud."""
+        return app.state.db.sync_status()
 
     for router in all_routers():
         app.include_router(router)

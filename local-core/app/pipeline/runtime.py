@@ -138,6 +138,26 @@ class LiveRuntime:
         self._prev_points: dict[str, list] = {}
         self._last_frames: dict[str, object] = {}   # source_id -> last frame
 
+        # rolling per-sensor observation caches — updated when a source is
+        # processed, read when its assets are evaluated. This lets capture be
+        # driven per-source (at each camera's own rate) instead of one global
+        # tick, while an asset fed by several cameras still sees the latest from
+        # each. tick() rebuilds all of them every call, so its behaviour is
+        # unchanged.
+        self._raw_by_sensor: dict[str, RawObservation] = {}
+        self._snooker_obs: dict[str, dict] = {}
+        self._source_ok: dict[str, bool] = {}
+        self._eval_lock = __import__("threading").Lock()
+
+        # which assets does each source feed (for per-source evaluation)
+        self._assets_by_source: dict[str, list[AssetRuntime]] = {}
+        for asset in assets:
+            for sensor in asset.sensors:
+                if sensor.source_id:
+                    lst = self._assets_by_source.setdefault(sensor.source_id, [])
+                    if asset not in lst:
+                        lst.append(asset)
+
         # one game state machine per asset that has a snooker sensor
         self._game_trackers: dict[str, SnookerGameTracker] = {}
         for asset in assets:
@@ -166,122 +186,158 @@ class LiveRuntime:
     def current_snapshots(self) -> list[AssetSnapshot]:
         return [self.engine.snapshot(a) for a in self.assets]
 
-    def tick(self) -> tuple[list[AssetSnapshot], list[AssetSnapshot]]:
-        """One pipeline tick. Returns (all_snapshots, changed_snapshots)."""
-        source_ok: dict[str, bool] = {}
-        # per source: {"person": [...], "snooker": [...]}
-        dets_by_source: dict[str, dict] = {}
+    def _detect_source(self, src: SourceRuntime, ok: bool, frame) -> dict:
+        """Run the needed detectors on one source's frame. Returns per-kind
+        detection lists. Offline/failed reads yield empty lists (so the source's
+        sensors observe 'nothing this tick', same as before)."""
+        kinds = {s.kind for s in src.sensors}
+        person, snooker = [], []
+        if ok and frame is not None:
+            self._last_frames[src.id] = frame
+            if kinds & PERSON_KINDS and self.detector is not None:
+                person = self.detector.detect(frame)
+            if SNOOKER_KIND in kinds and self.snooker_detector is not None:
+                snooker = self.snooker_detector.detect(frame)
+        return {"person": person, "snooker": snooker}
 
+    def _observe_source(self, src: SourceRuntime, bucket: dict) -> None:
+        """Turn one source's detections into per-sensor observations and write
+        them into the rolling caches."""
+        for sensor in src.sensors:
+            dets = bucket["snooker"] if sensor.kind == SNOOKER_KIND else bucket["person"]
+            obs = observe(sensor.kind, dets, sensor)
+            points = obs["points"]
+            active = _motion(self._prev_points.get(sensor.id), points,
+                             self.motion_threshold)
+            self._prev_points[sensor.id] = points
+            if sensor.kind == SNOOKER_KIND:
+                self._snooker_obs[sensor.id] = obs
+                # a table is "in use" only when there is PLAY (motion) or a new
+                # rack — NOT merely because balls sit on it (players leave balls
+                # between games).
+                game_start = obs.get("game_start", False)
+                self._raw_by_sensor[sensor.id] = RawObservation(
+                    present=active or game_start, confidence=obs["confidence"],
+                    count=obs["count"], active=active, game_start=game_start)
+            else:
+                self._raw_by_sensor[sensor.id] = RawObservation(
+                    present=obs["present"], confidence=obs["confidence"],
+                    count=obs["count"], active=active)
+
+    def process_source(self, src: SourceRuntime, ok: bool, frame) -> None:
+        """Detect + observe a single source's frame into the rolling caches.
+        Does NOT evaluate assets — call evaluate_assets() after (the scheduler
+        does one source then its assets; tick() does all then all)."""
+        with self._eval_lock:
+            self._source_ok[src.id] = ok
+            bucket = self._detect_source(src, ok, frame)
+            self._observe_source(src, bucket)
+
+    def evaluate_assets(
+        self, assets: Optional[list[AssetRuntime]] = None
+    ) -> tuple[list[AssetSnapshot], list[AssetSnapshot]]:
+        """Derive state for the given assets (default all) from the rolling
+        caches: update the state engine, emit change events + game events, and
+        sample metrics. Returns (snaps, changed)."""
+        if assets is None:
+            assets = self.assets
+        with self._eval_lock:
+            all_snaps: list[AssetSnapshot] = []
+            changed: list[AssetSnapshot] = []
+            change_events: list[ChangeEvent] = []
+            for asset in assets:
+                snap, was_changed = self.engine.update(
+                    asset, self._raw_by_sensor, self._source_ok)
+                all_snaps.append(snap)
+                if was_changed:
+                    prev = self._last_label.get(asset.id, "Unknown")
+                    changed.append(snap)
+                    change_events.append(ChangeEvent(prev_label=prev, snapshot=snap))
+                self._last_label[asset.id] = snap.label
+
+            if self.sink is not None and change_events:
+                self.sink.handle(self.venue_id, change_events)
+
+            self._run_game_trackers(assets, all_snaps)
+
+            if self.sampler is not None:
+                self._sample(all_snaps)
+            return all_snaps, changed
+
+    def _run_game_trackers(self, assets: list[AssetRuntime],
+                           snaps: list[AssetSnapshot]) -> None:
+        if not self._game_trackers:
+            return
+        snap_by_asset = {s.asset_id: s for s in snaps}
+        game_ts = self._clock()
+        for asset in assets:
+            tracker = self._game_trackers.get(asset.id)
+            if tracker is None:
+                continue
+            red, colored, gs, player = 0, False, False, False
+            for s in asset.sensors:
+                o = self._snooker_obs.get(s.id)
+                if not o:
+                    continue
+                red = max(red, o.get("red_count", 0))
+                colored = colored or o.get("colored_present", False)
+                gs = gs or o.get("game_start", False)
+                player = player or o.get("player", False)
+            evs = tracker.update(game_ts, red, colored, gs, player)
+            snap = snap_by_asset.get(asset.id)
+            if self.sink is not None:
+                for ev in evs:
+                    if ev.kind == "game_start" and hasattr(self.sink, "record_game_start"):
+                        self.sink.record_game_start(self.venue_id, snap, ts=ev.ts,
+                                                    game_number=ev.game_number)
+                    elif ev.kind == "game_end" and hasattr(self.sink, "record_game_end"):
+                        self.sink.record_game_end(self.venue_id, snap, ts=ev.ts,
+                                                  game_number=ev.game_number)
+            if self.debug_log is not None and snap is not None:
+                self.debug_log.row({
+                    "ts": game_ts, "table": asset.name, "red": red,
+                    "colored": int(colored), "game_start": int(gs),
+                    "player": int(player), "state": tracker.state,
+                    "red_floor": tracker._red_floor, "label": snap.label,
+                    "activity": snap.activity,
+                    "event": ";".join(e.kind for e in evs),
+                })
+
+    def process_and_evaluate(
+        self, src: SourceRuntime, ok: bool, frame
+    ) -> tuple[list[AssetSnapshot], list[AssetSnapshot]]:
+        """The scheduler's entry point: process one freshly-grabbed source and
+        immediately evaluate only the assets it feeds. Returns (snaps, changed)
+        for those assets."""
+        self.process_source(src, ok, frame)
+        return self.evaluate_assets(self._assets_by_source.get(src.id, []))
+
+    def tick(self) -> tuple[list[AssetSnapshot], list[AssetSnapshot]]:
+        """One synchronous pipeline tick over ALL sources — reads each source,
+        then evaluates every asset. Behaviour-preserving path used by the
+        fake-source tests and any non-scheduled run."""
         for src in self.sources:
-            kinds = {s.kind for s in src.sensors}
             fs = self.frame_sources.get(src.id)
-            person, snooker = [], []
-            ok = False
+            ok, frame = (False, None)
             if fs is not None:
                 ok, frame = fs.read()
-                if ok:
-                    self._last_frames[src.id] = frame
-                    if kinds & PERSON_KINDS and self.detector is not None:
-                        person = self.detector.detect(frame)
-                    if SNOOKER_KIND in kinds and self.snooker_detector is not None:
-                        snooker = self.snooker_detector.detect(frame)
-            source_ok[src.id] = ok
-            dets_by_source[src.id] = {"person": person, "snooker": snooker}
+            self.process_source(src, ok, frame)
+        return self.evaluate_assets(self.assets)
 
-        # raw per-sensor observations via the per-kind observation strategy
-        raw_by_sensor: dict[str, RawObservation] = {}
-        snooker_obs: dict[str, dict] = {}   # sensor_id -> full obs (for the game tracker)
-        for src in self.sources:
-            bucket = dets_by_source.get(src.id, {"person": [], "snooker": []})
-            for sensor in src.sensors:
-                dets = bucket["snooker"] if sensor.kind == SNOOKER_KIND else bucket["person"]
-                obs = observe(sensor.kind, dets, sensor)
-                if sensor.kind == SNOOKER_KIND:
-                    snooker_obs[sensor.id] = obs
-                points = obs["points"]
-                active = _motion(self._prev_points.get(sensor.id), points,
-                                 self.motion_threshold)
-                self._prev_points[sensor.id] = points
-                if sensor.kind == SNOOKER_KIND:
-                    # a table is "in use" only when there is PLAY (motion) or a
-                    # new rack — NOT merely because balls sit on it (players
-                    # leave balls between games).
-                    game_start = obs.get("game_start", False)
-                    raw_by_sensor[sensor.id] = RawObservation(
-                        present=active or game_start, confidence=obs["confidence"],
-                        count=obs["count"], active=active, game_start=game_start)
-                else:
-                    raw_by_sensor[sensor.id] = RawObservation(
-                        present=obs["present"], confidence=obs["confidence"],
-                        count=obs["count"], active=active)
-
-        all_snaps: list[AssetSnapshot] = []
-        changed: list[AssetSnapshot] = []
-        change_events: list[ChangeEvent] = []
-        for asset in self.assets:
-            snap, was_changed = self.engine.update(asset, raw_by_sensor, source_ok)
-            all_snaps.append(snap)
-            if was_changed:
-                prev = self._last_label.get(asset.id, "Unknown")
-                changed.append(snap)
-                change_events.append(ChangeEvent(prev_label=prev, snapshot=snap))
-            self._last_label[asset.id] = snap.label
-
-        if self.sink is not None and change_events:
-            self.sink.handle(self.venue_id, change_events)
-
-        # snooker game state machine -> game_start / game_end events
-        if self._game_trackers:
-            snap_by_asset = {s.asset_id: s for s in all_snaps}
-            game_ts = self._clock()
-            for asset in self.assets:
-                tracker = self._game_trackers.get(asset.id)
-                if tracker is None:
-                    continue
-                red, colored, gs, player = 0, False, False, False
-                for s in asset.sensors:
-                    o = snooker_obs.get(s.id)
-                    if not o:
-                        continue
-                    red = max(red, o.get("red_count", 0))
-                    colored = colored or o.get("colored_present", False)
-                    gs = gs or o.get("game_start", False)
-                    player = player or o.get("player", False)
-                evs = tracker.update(game_ts, red, colored, gs, player)
-                snap = snap_by_asset.get(asset.id)
-                if self.sink is not None:
-                    for ev in evs:
-                        if ev.kind == "game_start" and hasattr(self.sink, "record_game_start"):
-                            self.sink.record_game_start(self.venue_id, snap, ts=ev.ts,
-                                                        game_number=ev.game_number)
-                        elif ev.kind == "game_end" and hasattr(self.sink, "record_game_end"):
-                            self.sink.record_game_end(self.venue_id, snap, ts=ev.ts,
-                                                      game_number=ev.game_number)
-                if self.debug_log is not None and snap is not None:
-                    self.debug_log.row({
-                        "ts": game_ts, "table": asset.name, "red": red,
-                        "colored": int(colored), "game_start": int(gs),
-                        "player": int(player), "state": tracker.state,
-                        "red_floor": tracker._red_floor, "label": snap.label,
-                        "activity": snap.activity,
-                        "event": ";".join(e.kind for e in evs),
-                    })
-
-        if self.sampler is not None:
-            self._sample(all_snaps, raw_by_sensor)
-        return all_snaps, changed
-
-    def _sample(self, snaps: list[AssetSnapshot], raw_by_sensor: dict) -> None:
+    def _sample(self, snaps: list[AssetSnapshot]) -> None:
         """Emit one set of scalar metric samples per asset this tick."""
         ts = self._clock()
         # persons per asset = max count across its occupancy sensors (avoid
         # double-counting the same people across primary+supporting views).
         persons: dict[str, int] = {}
+        snap_ids = {s.asset_id for s in snaps}
         for asset in self.assets:
+            if asset.id not in snap_ids:
+                continue
             best = 0
             for s in asset.sensors:
                 if s.kind in ("occupancy", "presence", "snooker_game"):
-                    obs = raw_by_sensor.get(s.id)
+                    obs = self._raw_by_sensor.get(s.id)
                     if obs:
                         best = max(best, obs.count)
             persons[asset.id] = best
@@ -307,7 +363,7 @@ class LiveRuntime:
 
 def build_live_runtime(
     db, venue_id: str, detector: Detector,
-    source_factory: Callable,     # (SourceRuntime) -> FrameSource
+    source_factory: Optional[Callable] = None,  # (SourceRuntime)->FrameSource; None=scheduled
     engine: Optional[StateEngine] = None,
     sink: Optional[StateSink] = None,
     sampler=None,
@@ -323,9 +379,12 @@ def build_live_runtime(
 ) -> LiveRuntime:
     assets, sources = load_venue_config(db, venue_id)
     frame_sources = {}
-    for src in sources:
-        if src.uri:
-            frame_sources[src.id] = source_factory(src)
+    # source_factory=None -> scheduled mode: no persistent per-source
+    # connections; the capture scheduler grabs frames on demand instead.
+    if source_factory is not None:
+        for src in sources:
+            if src.uri:
+                frame_sources[src.id] = source_factory(src)
     return LiveRuntime(venue_id, assets, sources, frame_sources, detector,
                        engine, sink, sampler, motion_threshold=motion_threshold,
                        snooker_detector=snooker_detector,

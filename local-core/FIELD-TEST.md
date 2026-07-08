@@ -133,6 +133,185 @@ SnapshotStore().cleanup(keep_days=7)
 Optional cloud backup: set `STRIKEE_S3_BUCKET` (needs `boto3` + AWS creds) to
 best-effort upload each snapshot to S3.
 
+## Windows venue box — bring-up (one-time)
+
+The code is cross-platform; the two historical "works on Linux, breaks on
+Windows" traps are handled for you: the OpenMP `libiomp5md.dll` clash (auto-set
+`KMP_DUPLICATE_LIB_OK`) and flaky HEVC/RTSP (forced TCP transport + an ffmpeg
+fallback in the frame grabber). Steps on the Windows box:
+
+```
+python --version                 # need 3.11+  (install from python.org / winget)
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[perception,desktop]"
+
+REM prove the stack — especially the model, which is what broke before:
+strikee-doctor --model best.pt --rtsp "rtsp://USER:PASS@DVR_IP:554/cam/realmonitor?channel=1&subtype=0"
+```
+
+`strikee-doctor` checks Python, torch (+ CPU/GPU), OpenCV, **loads best.pt and
+runs one real inference**, and (with `--rtsp`) decodes one DVR frame. All green =
+safe to run `strikee-core`. If the model line ever fails, that output is the
+exact error to send me. (For the ffmpeg fallback, install ffmpeg and put it on
+PATH — optional, only used if OpenCV can't decode the HEVC stream itself.)
+
+## Remote access + backup (view from anywhere, keep it safe)
+
+One database (local SQLite), viewed live off-box and backed up to the cloud — no
+Google Sheets, no second datastore.
+
+### View the dashboard from anywhere — Cloudflare Tunnel (free)
+
+The box already serves the full live dashboard on `127.0.0.1:8760`. A tunnel
+makes it reachable from your phone/laptop without opening any ports.
+
+- **Quick try (no account):** on the box, `cloudflared tunnel --url http://127.0.0.1:8760`
+  prints a temporary `https://….trycloudflare.com` URL. Good for a first look;
+  it changes each run and is unprotected.
+- **Real use:** a **named tunnel** on your Cloudflare account routed to a
+  subdomain, run as a Windows service, and gated with **Cloudflare Access**
+  (email one-time-code) so only you can open it. Then the dashboard is at a
+  stable, private URL. The box stays the source of truth; nothing syncs.
+
+### Back up the DB to Cloudflare R2 (free tier, no egress fees)
+
+A consistent snapshot (`VACUUM INTO`, safe while the pipeline writes) is uploaded
+on a schedule, so a dead box loses nothing.
+
+```
+pip install -e ".[cloud]"          # boto3
+
+REM env on the box (R2 example):
+set STRIKEE_BACKUP_BUCKET=strikee
+set STRIKEE_BACKUP_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+set AWS_ACCESS_KEY_ID=<r2 token key>
+set AWS_SECRET_ACCESS_KEY=<r2 token secret>
+set STRIKEE_BACKUP_EVERY_MIN=10     REM app backs up every 10 min automatically
+
+strikee-backup                      REM or run once manually / from Task Scheduler
+```
+
+Uploads `strikee-<timestamp>.db` plus a stable `strikee-latest.db`. To read the
+data, pull `strikee-latest.db` and open it in any SQLite tool. Backup is
+best-effort — a failed upload never affects the venue. (S3 works too: set the
+same vars, drop the R2 endpoint, use a real region.)
+
+### Option: Turso (cloud-synced database) instead of tunnel+R2
+
+If you'd rather have ONE system — a SQLite you query from anywhere, always
+available — use the **Turso** backend. The box writes to a **local replica**
+(so it keeps recording offline), and syncs to the Turso cloud so the data is
+queryable remotely. Free tier is plenty.
+
+```
+pip install -e ".[turso]"          # native libsql client
+
+REM 1) verify the native client works on THIS box FIRST, no cloud needed:
+set STRIKEE_LIBSQL_LOCAL=1
+strikee-doctor --model best.pt     REM Turso line should say libsql loads/runs
+
+REM 2) then point at your Turso DB:
+set TURSO_DATABASE_URL=libsql://<your-db>.turso.io
+set TURSO_AUTH_TOKEN=<token>
+set STRIKEE_TURSO_SYNC_SEC=15       REM push local changes to cloud every 15s
+strikee-doctor --model best.pt     REM Turso line should say "synced to cloud"
+strikee-core
+```
+
+**Sync health is visible.** The dashboard header shows a badge — **`☁ synced 12s ago`** (green) when tracking data is reaching the cloud, or **`⚠ NOT syncing`** (red) if it stalls — so you'd notice immediately if data stopped flowing. Also at `GET /api/sync-health`. (Hidden entirely on local-only sqlite3.)
+
+**Verify offline writes before you trust it (important):** with Turso set,
+start `strikee-core`, **disconnect the internet**, and confirm games still get
+recorded (the local replica should accept writes). Reconnect and confirm they
+appear in Turso. If writes fail while offline, stay on the local-first SQLite +
+tunnel/R2 setup instead — the box must never miss a rack because the wifi
+blipped. (`strikee-doctor` with `STRIKEE_LIBSQL_LOCAL=1` isolates the native-
+client question from the network question.)
+
+## Run unattended on Windows (PC on → it just works, staff do nothing)
+
+By default the app needs someone to launch it and click **Start pipeline**. To
+make it turnkey, two things: auto-start the pipeline, and auto-launch on boot.
+
+**One-time setup (during install):** configure the venue and draw the zones with
+`field_setup.py` first — auto-start only works once a venue exists.
+
+**1) Make the app auto-start the pipeline + run windowless.** Set these as
+*system* environment variables (so they apply at boot):
+
+```
+STRIKEE_AUTOSTART_VENUE = <your venue id>     (or "all" for every venue)
+STRIKEE_HEADLESS        = 1                    (server only, no window)
+STRIKEE_MAX_STREAMS     = 3
+# + your DB choice: STRIKEE_DB=... or the TURSO_* vars
+```
+
+Now `strikee-core` boots straight into running the venue — no clicks. Staff open
+the dashboard at `http://127.0.0.1:8760/` (or the tunnel URL) only when they want
+to *look*; they never have to start anything.
+
+**2) Launch it on boot.** Simplest reliable path for a club PC:
+
+- Enable **Windows auto-login** for the club user.
+- Put a shortcut to `strikee-core` (the venv's `Scripts\strikee-core.exe`) in the
+  **Startup folder** (`Win+R` → `shell:startup`).
+
+More robust (survives crashes, runs without login) — Task Scheduler:
+
+```
+schtasks /Create /TN "StrikeeVision" /SC ONSTART /RL HIGHEST /RU SYSTEM ^
+  /TR "C:\path\to\.venv\Scripts\strikee-core.exe" /F
+# then, in Task Scheduler UI: Properties → Settings →
+#   "If the task fails, restart every 1 minute, up to 3 times"
+```
+
+**3) Stop the PC from sleeping** (or it stops processing when idle):
+
+```
+powercfg /change standby-timeout-ac 0
+powercfg /change monitor-timeout-ac 0
+```
+
+**Recovery:** on a power cut / reboot, the PC powers on → the task relaunches
+`strikee-core` → auto-start begins the pipeline again. If the DVR is slow to come
+up, the capture scheduler retries offline cameras automatically. So a rebooted
+club PC returns to tracking on its own, hands-off.
+
+## Footfall (Channel 7 — club entrance)
+
+Footfall is counted by **directional line-crossing**: people are tracked
+frame-to-frame (ByteTrack — a temporary id while on screen, no face/identity)
+and a virtual **line** across the entrance counts each passage `in` / `out`.
+Footfall = `in` crossings; **occupancy = in − out** (self-corrects when someone
+steps out for a call and returns). It's a **trend** tool — a consistent daily
+proxy, not an exact headcount (a re-entering regular counts twice; we can't
+re-identify without faces). All traffic is on the **left** of the ch7 frame
+(main door bottom-left, gaming-lounge entrance mid-left; the centre pillar hides
+only a railing/stairwell with no traffic — so we ignore the centre/right).
+
+Footfall needs a **dedicated continuous lane** (several fps), unlike the slow
+rotating table cameras — tracking needs consecutive frames.
+
+**Probe it on-site (see what the model picks up before committing):**
+
+```
+# in the scratchpad dir, with the venue network reachable:
+# 1) LOOK at detection first (the make-or-break in low light):
+python footfall_test.py --channel 7 --minutes 10 --fps 4 --clahe
+
+# 2) once you can see where people walk, add the two left-side lines
+#    (x1,y1,x2,y2; 'inside' = LEFT of a->b; add --flip-* if it counts backwards)
+python footfall_test.py --channel 7 --minutes 20 --fps 5 --clahe \
+    --club-line 250,300,250,760 --gaming-line 120,150,120,520 \
+    --roi-right 900        # ignore everything right of x=900 (pillar/door)
+```
+
+It draws boxes + track ids + feet points + the lines + live counts, saves
+annotated frames to `footfall_out/frames/`, and logs `footfall_out/footfall.csv`.
+**Validate after the lighting upgrade** — night detection at that dark corner is
+the limiting factor, not the counting logic.
+
 ## Validating a LIVE run (no video to re-watch)
 
 You can't rewind a live stream, so validate three ways together:
@@ -185,8 +364,26 @@ ffmpeg -i "rtsp://USER:PASS@CAM_IP:554/stream1" -c copy -t 7200 test_recording.m
 | A stuck/abandoned game never ends | `STRIKEE_MAX_GAME_MIN` | pure safety net — force-end after this many minutes (default **120**, well beyond any real frame, so a long game is never cut short). Raise if you ever have longer sessions. |
 | Missed racks | sensor confidence | lower `conf_threshold`; use the main stream |
 | "Active" vs "Idle" wrong | `STRIKEE_MOTION_THRESHOLD`, `STRIKEE_STILL_TICKS` | tune threshold / still ticks |
-| Sampling too slow/fast | `STRIKEE_TICK_SEC` | 5–10 |
+| Sampling too slow/fast | `STRIKEE_TICK_SEC` | 5–10 (legacy tick loop only) |
 | Use a different snooker model | `STRIKEE_SNOOKER_MODEL` | path to a `.pt` |
+| DVR drops streams under load | `STRIKEE_MAX_STREAMS` | max concurrent connections (default **3** — measured safe on the club Dahua; 4 dropped) |
+| Snooker tables sampled too slow/fast | `STRIKEE_RATE_TABLE` | seconds between grabs per table (default **13**) |
+| Gaming-zone cameras sampled too slow/fast | `STRIKEE_RATE_GAMING` | seconds per grab (default **5**) |
+| Entry/footfall cameras sampled too slow/fast | `STRIKEE_RATE_ENTRY` | seconds per grab (default **3**) |
+| Force the old all-streams-at-once loop | `STRIKEE_SCHEDULER=0` | only safe when #cameras ≤ DVR limit |
+
+### Capture scheduler (default)
+
+The pipeline now captures through a **K-slot rotating scheduler**: it holds at
+most `STRIKEE_MAX_STREAMS` (default 3) connections open and grabs each camera at
+its own target rate (entries every 3s, gaming every 5s, tables every 13s),
+always servicing the most-overdue camera first. This runs all the venue's
+cameras through the DVR's small concurrent-stream budget **without ever
+exceeding it** — no dropped streams. Validated live on the club DVR: max 3
+concurrent, entries grabbed ~4× more often than tables. Rates are per **sensor
+kind**, so once the gaming/entry cameras are configured they get the right
+cadence automatically. Snooker tables use the `snooker_game` kind; entry cameras
+use the `footfall` kind (add it when you draw those zones).
 
 Example: `STRIKEE_EXIT_TICKS=10 STRIKEE_TICK_SEC=6 strikee-core`
 
