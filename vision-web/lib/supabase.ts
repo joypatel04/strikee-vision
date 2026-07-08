@@ -60,6 +60,7 @@ export async function billedByFacility(
     .eq("shop_id", shopId)
     .gte("created_at", startUtc)
     .lt("created_at", endUtc)
+    .is("cancelled_at", null)          // cancelled sessions aren't games played
     .not("facility_id", "is", null);
   if (error || !data) return {};
   const out: Record<number, BilledFacility> = {};
