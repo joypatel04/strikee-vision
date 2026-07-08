@@ -1,5 +1,6 @@
 import { createClient, type Client } from "@libsql/client";
 import { hasTurso } from "./config";
+import { businessDayIstRange } from "./dateTime";
 
 let _client: Client | null = null;
 function client(): Client {
@@ -30,17 +31,19 @@ export async function listAssets(): Promise<TrackedAsset[]> {
   }
 }
 
-/** Games we DETECTED per asset on a date (count of game_start events).
- * ts is a local ISO string, so the first 10 chars are the local date. */
+/** Games we DETECTED per asset for a BUSINESS DAY (05:00 IST → next 05:00 IST),
+ * to align with Strikee. ts is IST-local ISO, compared on "YYYY-MM-DDTHH:MM:SS". */
 export async function trackedGamesByAsset(date: string): Promise<Record<string, number>> {
   if (!hasTurso()) return {};
   try {
+    const { istStart, istEnd } = businessDayIstRange(date);
     const rs = await client().execute({
       sql: `SELECT asset_id, COUNT(*) AS games
             FROM events
-            WHERE type = 'game_start' AND substr(ts, 1, 10) = ?
+            WHERE type = 'game_start'
+              AND substr(ts, 1, 19) >= ? AND substr(ts, 1, 19) < ?
             GROUP BY asset_id`,
-      args: [date],
+      args: [istStart, istEnd],
     });
     const out: Record<string, number> = {};
     for (const r of rs.rows) if (r.asset_id != null) out[String(r.asset_id)] = Number(r.games);
@@ -50,16 +53,19 @@ export async function trackedGamesByAsset(date: string): Promise<Record<string, 
   }
 }
 
-/** Minutes each table was actually in use on a date (sum of usage sessions). */
+/** Minutes each table was in use for a BUSINESS DAY (sum of usage sessions,
+ * keyed by their start within the 05:00 IST → next 05:00 IST window). */
 export async function inUseMinutesByAsset(date: string): Promise<Record<string, number>> {
   if (!hasTurso()) return {};
   try {
+    const { istStart, istEnd } = businessDayIstRange(date);
     const rs = await client().execute({
       sql: `SELECT asset_id, COALESCE(SUM(duration_sec), 0) AS secs
             FROM sessions
-            WHERE substr(start_ts, 1, 10) = ? AND status != 'voided'
+            WHERE substr(start_ts, 1, 19) >= ? AND substr(start_ts, 1, 19) < ?
+              AND status != 'voided'
             GROUP BY asset_id`,
-      args: [date],
+      args: [istStart, istEnd],
     });
     const out: Record<string, number> = {};
     for (const r of rs.rows) out[String(r.asset_id)] = Math.round(Number(r.secs) / 60);

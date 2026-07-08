@@ -14,7 +14,7 @@ import {
   Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { reconcile } from "@/lib/reconcile";
-import { hasSupabase, hasTurso, todayIST } from "@/lib/config";
+import { hasSupabase, hasTurso, currentBusinessDate } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +25,7 @@ export default async function Dashboard({
 }: {
   searchParams: { date?: string };
 }) {
-  const today = todayIST();
+  const today = currentBusinessDate();
   const date = searchParams.date || today;
   const r = await reconcile(date);
   const configured = hasTurso() && hasSupabase();
@@ -41,6 +41,7 @@ export default async function Dashboard({
             <h1 className="text-xl font-semibold tracking-tight">Reconciliation</h1>
             <p className="text-sm text-muted-foreground">
               Games our cameras tracked vs what Strikee billed · Snooker (shop 36)
+              <span className="ml-1 text-muted-foreground/70">· business day 5 AM–5 AM IST</span>
             </p>
           </div>
           <DateNav date={date} today={today} />

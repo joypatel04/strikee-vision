@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { hasSupabase } from "./config";
+import { businessDayUtcRange } from "./dateTime";
 
 // Server-only client using the service role key. NEVER import this into a
 // client component — the key must never reach the browser.
@@ -50,11 +51,15 @@ export async function billedByFacility(
   date: string
 ): Promise<Record<number, BilledFacility>> {
   if (!hasSupabase()) return {};
+  // Group by the Strikee BUSINESS DAY (05:00 IST → 05:00 IST next day) on
+  // created_at, NOT the naive session_date (which mislabels post-midnight games).
+  const { startUtc, endUtc } = businessDayUtcRange(date);
   const { data, error } = await admin()
     .from("game_sessions")
     .select("facility_id, number_of_games, total_price")
     .eq("shop_id", shopId)
-    .eq("session_date", date)
+    .gte("created_at", startUtc)
+    .lt("created_at", endUtc)
     .not("facility_id", "is", null);
   if (error || !data) return {};
   const out: Record<number, BilledFacility> = {};
