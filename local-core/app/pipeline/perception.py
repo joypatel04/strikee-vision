@@ -43,12 +43,31 @@ class FakeDetector:
         return []
 
 
+def _yolo_class():
+    """Import Ultralytics' YOLO with torch loaded FIRST.
+
+    On Windows, torch and OpenCV each ship their own OpenMP runtime, and
+    whichever loads first wins. Ultralytics imports cv2 before torch, so going
+    straight to `from ultralytics import YOLO` loads OpenCV's runtime first and
+    torch aborts the process during import - a C++ throw ending in terminate(),
+    with no Python traceback to explain it. strikee-doctor never hit this only
+    because it happens to import torch before cv2.
+
+    Importing torch here first makes that ordering explicit rather than
+    accidental. KMP_DUPLICATE_LIB_OK (set in platform_env) suppresses the
+    specific OMP Error #15 abort but does not fix the ordering itself.
+    """
+    import torch  # noqa: F401  - MUST precede cv2/ultralytics; see above
+    from ultralytics import YOLO
+    return YOLO
+
+
 class YOLODetector:
     """General YOLO person detector. Lazy import. Model configurable (nano is
     fast; yolo11x is more accurate for people at difficult angles)."""
 
     def __init__(self, model: str = "yolo11n.pt", conf: float = 0.25):
-        from ultralytics import YOLO  # lazy
+        YOLO = _yolo_class()  # lazy; torch before cv2
         self._model = YOLO(model)
         self._conf = conf
 
@@ -79,7 +98,7 @@ class SnookerDetector:
     robust to intermittent misses."""
 
     def __init__(self, model: str = "best.pt", conf: float = 0.20, clahe: bool = True):
-        from ultralytics import YOLO  # lazy
+        YOLO = _yolo_class()  # lazy; torch before cv2
         self._model = YOLO(model)
         self._names = self._model.names
         self._conf = conf
