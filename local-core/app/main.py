@@ -188,7 +188,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def dashboard():
         index = WEB_DIR / "index.html"
         if index.exists():
-            return index.read_text()
+            return index.read_text(encoding="utf-8")
         return "<h1>Strikee Vision Local Core</h1><p>Dashboard shell not found.</p>"
 
     return app

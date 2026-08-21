@@ -215,7 +215,7 @@ class Database:
 
     def init_schema(self) -> None:
         with self._lock:
-            self._conn.executescript(SCHEMA_PATH.read_text())
+            self._conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
             self._conn.commit()
 
     @contextmanager

@@ -17,11 +17,11 @@ class DebugLog:
     def __init__(self, path: str):
         new = True
         try:
-            with open(path, "r"):
+            with open(path, "r", encoding="utf-8"):
                 new = False
         except OSError:
             new = True
-        self._f = open(path, "a", newline="")
+        self._f = open(path, "a", newline="", encoding="utf-8")
         self._w = csv.writer(self._f)
         if new:
             self._w.writerow(COLUMNS)
