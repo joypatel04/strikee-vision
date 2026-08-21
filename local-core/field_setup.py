@@ -119,20 +119,60 @@ def draw_zones(frame) -> list[dict]:
     return zones
 
 
+def _find(repo, cur, **match):
+    """First row whose fields all equal `match`, else None. The config tables hold
+    a handful of rows, so scanning them is cheaper than adding query plumbing."""
+    for row in repo.list(cur):
+        if all(row.get(k) == v for k, v in match.items()):
+            return row
+    return None
+
+
 def write_config(db_path, source, venue_name, source_name, bu_name,
                  asset_type_name, zones, mode="snooker_game") -> str:
+    """Write (or extend) a venue config.
+
+    A venue usually has several cameras, and you draw one channel per run - so
+    everything above the camera is reused when it already exists. Creating a
+    fresh venue per run (the old behaviour) scattered one channel into each of
+    several venues, and the dashboard could then only ever track one of them.
+    """
     repos = {s.name: Repository(s) for s in REGISTRY}
     db = Database(db_path)
     with db.cursor() as cur:
-        org = repos["organization"].create(cur, {"name": venue_name})
-        venue = repos["venue"].create(cur, {"organization_id": org["id"], "name": venue_name})
-        bu = repos["business_unit"].create(cur, {"venue_id": venue["id"], "name": bu_name,
-                                                 "kind": bu_name.lower()})
-        space = repos["space"].create(cur, {"venue_id": venue["id"], "name": f"{bu_name} Area"})
-        src = repos["video_source"].create(cur, {"venue_id": venue["id"],
-                                                 "space_id": space["id"],
-                                                 "name": source_name, "uri": source})
-        at = repos["asset_type"].create(cur, {"venue_id": venue["id"], "name": asset_type_name})
+        venue = _find(repos["venue"], cur, name=venue_name)
+        if venue is None:
+            org = repos["organization"].create(cur, {"name": venue_name})
+            venue = repos["venue"].create(cur, {"organization_id": org["id"],
+                                                "name": venue_name})
+        else:
+            print(f"  reusing existing venue '{venue_name}'")
+
+        bu = _find(repos["business_unit"], cur, venue_id=venue["id"], name=bu_name)
+        if bu is None:
+            bu = repos["business_unit"].create(cur, {"venue_id": venue["id"],
+                                                     "name": bu_name,
+                                                     "kind": bu_name.lower()})
+
+        space = _find(repos["space"], cur, venue_id=venue["id"], name=f"{bu_name} Area")
+        if space is None:
+            space = repos["space"].create(cur, {"venue_id": venue["id"],
+                                                "name": f"{bu_name} Area"})
+
+        at = _find(repos["asset_type"], cur, venue_id=venue["id"], name=asset_type_name)
+        if at is None:
+            at = repos["asset_type"].create(cur, {"venue_id": venue["id"],
+                                                  "name": asset_type_name})
+
+        src = _find(repos["video_source"], cur, venue_id=venue["id"], uri=source)
+        if src is None:
+            src = repos["video_source"].create(cur, {"venue_id": venue["id"],
+                                                     "space_id": space["id"],
+                                                     "name": source_name, "uri": source})
+        else:
+            print(f"  camera already configured as '{src['name']}' - adding these "
+                  f"zones to it (re-running the same channel adds duplicates)")
+
         for z in zones:
             asset = repos["asset"].create(cur, {
                 "venue_id": venue["id"], "space_id": space["id"],
