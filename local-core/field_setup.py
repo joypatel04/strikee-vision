@@ -61,8 +61,16 @@ def grab_frame(source: str):
     return frame
 
 
-def draw_zones(frame) -> list[dict]:
-    """Interactive polygon drawing. Returns [{name, polygon}, ...]."""
+def draw_zones(frame, max_w: int = 1280, max_h: int = 720) -> list[dict]:
+    """Interactive polygon drawing. Returns [{name, polygon}, ...].
+
+    The DVR's main stream is 960x1080 - taller than most screens once the title
+    bar and taskbar are accounted for - so at native size the bottom of the table
+    is off-screen and unclickable. We shrink the *display* to fit and convert
+    every click back, so polygons are always stored in ORIGINAL frame
+    coordinates. That matters: the pipeline applies these zones to full-size
+    frames, so display-space points would silently mis-place every zone.
+    """
     import cv2
     import numpy as np
 
@@ -70,23 +78,39 @@ def draw_zones(frame) -> list[dict]:
     points: list[list[int]] = []
     window = "Draw a zone per table — click, 'n' name, 'u' undo, 's' save, 'q' quit"
 
+    h, w = frame.shape[:2]
+    scale = min(1.0, max_w / w, max_h / h)
+    display = (frame if scale == 1.0
+               else cv2.resize(frame, (int(w * scale), int(h * scale)),
+                               interpolation=cv2.INTER_AREA))
+    if scale < 1.0:
+        print(f"  window scaled to {int(w*scale)}x{int(h*scale)} "
+              f"({scale*100:.0f}%) to fit your screen - zones are still saved at "
+              f"full {w}x{h} resolution")
+
+    def to_disp(p):
+        return (int(round(p[0] * scale)), int(round(p[1] * scale)))
+
     def redraw():
-        canvas = frame.copy()
+        canvas = display.copy()
         for z in zones:
-            poly = np.array(z["polygon"], dtype=np.int32)
+            poly = np.array([to_disp(pt) for pt in z["polygon"]], dtype=np.int32)
             cv2.polylines(canvas, [poly], True, (0, 200, 0), 2)
             cx, cy = poly.mean(axis=0).astype(int)
             cv2.putText(canvas, z["name"], (cx - 40, cy),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 0), 2)
         for i, p in enumerate(points):
-            cv2.circle(canvas, tuple(p), 4, (0, 255, 255), -1)
+            cv2.circle(canvas, to_disp(p), 4, (0, 255, 255), -1)
             if i:
-                cv2.line(canvas, tuple(points[i - 1]), tuple(p), (0, 255, 255), 2)
+                cv2.line(canvas, to_disp(points[i - 1]), to_disp(p), (0, 255, 255), 2)
         cv2.imshow(window, canvas)
 
     def on_mouse(event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            points.append([x, y])
+            # back to original-frame coordinates, clamped inside the image
+            ox = min(w - 1, max(0, int(round(x / scale))))
+            oy = min(h - 1, max(0, int(round(y / scale))))
+            points.append([ox, oy])
             redraw()
 
     cv2.namedWindow(window)
@@ -198,6 +222,9 @@ def main():
                     choices=["snooker_game", "occupancy"],
                     help="sensor mode: snooker_game (balls, for tables) or occupancy (people)")
     ap.add_argument("--db", default=os.environ.get("STRIKEE_DB", "strikee.db"))
+    ap.add_argument("--max-window", default="1280x720",
+                    help="largest on-screen size for the editor, WxH (default "
+                         "1280x720). Zones are always saved at full resolution.")
     args = ap.parse_args()
 
     print(f"Grabbing a frame from {args.source} ...")
@@ -208,7 +235,12 @@ def main():
         print("Mode: snooker_game — draw the zone around the TABLE surface "
               "(where the balls are).")
 
-    zones = draw_zones(frame)
+    try:
+        max_w, max_h = (int(v) for v in args.max_window.lower().split("x"))
+    except ValueError:
+        print(f"--max-window must look like 1280x720, got {args.max_window!r}")
+        sys.exit(2)
+    zones = draw_zones(frame, max_w=max_w, max_h=max_h)
     if not zones:
         print("No zones drawn — nothing written."); return
 
