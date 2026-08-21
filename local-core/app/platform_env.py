@@ -9,11 +9,17 @@ imported. Neutralises the classic 'works on Linux, breaks on Windows' failures:
     Windows.
   * Flaky HEVC-over-RTSP. Forcing the ffmpeg TCP transport makes the DVR's H.265
     streams decode reliably through OpenCV on Windows.
+  * Legacy console code pages. A Windows console defaults to cp1252/cp437, which
+    cannot render the em-dashes in our own status output - so a purely cosmetic
+    character raises UnicodeEncodeError ("charmap codec can't encode/decode") and
+    kills an otherwise healthy run. We reconfigure stdout/stderr to UTF-8 and
+    never fail on an unmappable character.
 
 All values use setdefault, so an explicit environment override always wins and
 calling harden() more than once is safe.
 """
 import os
+import sys
 
 _DEFAULTS = {
     "KMP_DUPLICATE_LIB_OK": "TRUE",                       # torch+MKL OpenMP clash (Windows)
@@ -21,6 +27,21 @@ _DEFAULTS = {
 }
 
 
+def _force_utf8_console() -> None:
+    """Make our own output survive a legacy Windows code page. Best-effort: under
+    pytest capture or a plain pipe the streams may not be reconfigurable, and that
+    is fine - there is nothing to fix in those cases."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 def harden() -> None:
     for key, value in _DEFAULTS.items():
         os.environ.setdefault(key, value)
+    _force_utf8_console()

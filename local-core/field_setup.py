@@ -25,7 +25,12 @@ import sys
 
 from app.db import Database
 from app.entities import REGISTRY
+from app.platform_env import harden
 from app.repository import Repository
+
+# Windows: legacy console code page + OpenCV/HEVC RTSP quirks, before we print
+# anything or open a stream.
+harden()
 
 
 def open_source(source: str):
