@@ -221,6 +221,26 @@ strikee-core
 
 **Sync health is visible.** The dashboard header shows a badge — **`☁ synced 12s ago`** (green) when tracking data is reaching the cloud, or **`⚠ NOT syncing`** (red) if it stalls — so you'd notice immediately if data stopped flowing. Also at `GET /api/sync-health`. (Hidden entirely on local-only sqlite3.)
 
+**Configure Turso BEFORE drawing zones.** Whatever creates `strikee.db` first
+decides what kind of database it is, and an embedded replica will not adopt one
+that plain SQLite made. Run `field_setup.py` first and you get:
+
+```
+local state is incorrect. db file exists but metadata file does not
+```
+
+There is no repair - the file has to be recreated by libsql. Clear it and start
+over:
+
+```
+.venv\Scripts\python.exe tools\fresh_start.py          # shows what it would remove
+.venv\Scripts\python.exe tools\fresh_start.py --yes    # removes it
+```
+
+That clears the local database, its sidecars, snapshots and debug logs. It does
+not touch the cloud: a Turso database keeps what it has, and uploaded snapshots
+stay in their bucket.
+
 **If sync fails, ask Turso directly.** The client's own errors are hard to read -
 a wrong hostname and a wrong token look similar from inside it:
 

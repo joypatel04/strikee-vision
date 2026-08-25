@@ -192,13 +192,33 @@ class Database:
         local_libsql = os.environ.get("STRIKEE_LIBSQL_LOCAL")
         if path != ":memory:" and (turso or local_libsql):
             import libsql  # lazy, optional dependency
-            if turso:
-                url, token = turso
-                raw = libsql.connect(path, sync_url=url, auth_token=token)
-                self.backend = "turso"
-            else:
-                raw = libsql.connect(path)
-                self.backend = "libsql-local"
+            try:
+                if turso:
+                    url, token = turso
+                    raw = libsql.connect(path, sync_url=url, auth_token=token)
+                    self.backend = "turso"
+                else:
+                    raw = libsql.connect(path)
+                    self.backend = "libsql-local"
+            except Exception as exc:
+                # An embedded replica keeps metadata beside the database file and
+                # will not adopt one that plain SQLite created - which is what you
+                # get by running field_setup.py before configuring Turso. libsql
+                # reports this as "local state is incorrect", which does not
+                # suggest the fix, and there is no repair: the file must be
+                # recreated by libsql itself.
+                text = str(exc).lower()
+                if "local state" in text or "metadata file" in text:
+                    raise RuntimeError(
+                        f"{path} was created by plain SQLite, so it cannot be used "
+                        f"as a Turso replica ({exc}).\n"
+                        f"Clear the local database and let libsql recreate it:\n"
+                        f"    python tools/fresh_start.py --yes\n"
+                        f"Then set the Turso values in .env BEFORE running "
+                        f"field_setup.py - whatever creates the file first decides "
+                        f"what kind of database it is."
+                    ) from exc
+                raise
             try:
                 raw.execute("PRAGMA foreign_keys = ON")   # match sqlite3: enforce FKs/cascade
             except Exception:
