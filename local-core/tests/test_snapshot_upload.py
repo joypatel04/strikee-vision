@@ -4,6 +4,8 @@ The bug this pins down: SnapshotStore built a bare boto3 client, so an R2
 bucket name was sent to Amazon S3 - and the blanket `except: pass` meant the
 failure was invisible.
 """
+import pytest
+
 from app.snapshots import SnapshotStore
 
 
@@ -25,13 +27,6 @@ def test_falls_back_to_the_backup_endpoint(monkeypatch):
     s = SnapshotStore("snapshots")
     assert s.s3_endpoint == "https://acct.r2.cloudflarestorage.com"
     assert s.s3_region == "auto"
-
-
-def test_region_defaults_to_auto_which_is_what_r2_wants(monkeypatch):
-    for v in ("STRIKEE_S3_ENDPOINT", "STRIKEE_S3_REGION",
-              "STRIKEE_BACKUP_ENDPOINT", "STRIKEE_BACKUP_REGION"):
-        monkeypatch.delenv(v, raising=False)
-    assert SnapshotStore("snapshots").s3_region == "auto"
 
 
 def test_client_passes_endpoint_url_to_boto3(monkeypatch):
@@ -178,3 +173,67 @@ def test_cleanup_removes_old_and_keeps_recent(tmp_path):
 
     assert removed == 1
     assert not old.exists() and new.exists()
+
+
+# ------------------------------------------------------------------ AWS vs R2
+
+
+def test_no_endpoint_means_no_region_default(monkeypatch):
+    """'auto' is an R2 convention. On AWS it resolves to nothing, so we must
+    leave the region to boto3 rather than inventing one."""
+    for v in ("STRIKEE_S3_ENDPOINT", "STRIKEE_S3_REGION",
+              "STRIKEE_BACKUP_ENDPOINT", "STRIKEE_BACKUP_REGION"):
+        monkeypatch.delenv(v, raising=False)
+    assert SnapshotStore("snapshots", s3_bucket="b").s3_region is None
+
+
+def test_endpoint_present_defaults_region_to_auto(monkeypatch):
+    for v in ("STRIKEE_S3_REGION", "STRIKEE_BACKUP_REGION"):
+        monkeypatch.delenv(v, raising=False)
+    s = SnapshotStore("snapshots", s3_bucket="b",
+                      s3_endpoint="https://acct.r2.cloudflarestorage.com")
+    assert s.s3_region == "auto"
+
+
+def test_explicit_aws_region_is_used(monkeypatch):
+    monkeypatch.setenv("STRIKEE_S3_REGION", "ap-south-1")
+    assert SnapshotStore("snapshots", s3_bucket="b").s3_region == "ap-south-1"
+
+
+def test_region_kwarg_is_omitted_when_unset(monkeypatch):
+    captured = {}
+
+    class FakeBoto:
+        @staticmethod
+        def client(service, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    import sys
+    monkeypatch.setitem(sys.modules, "boto3", FakeBoto)
+    for v in ("STRIKEE_S3_ENDPOINT", "STRIKEE_S3_REGION",
+              "STRIKEE_BACKUP_ENDPOINT", "STRIKEE_BACKUP_REGION"):
+        monkeypatch.delenv(v, raising=False)
+    SnapshotStore("snapshots", s3_bucket="b")._client()
+    assert "region_name" not in captured, "would send region_name=None to boto3"
+    assert "endpoint_url" not in captured
+
+
+def test_client_bounds_its_timeouts(monkeypatch):
+    """Upload runs while the processing lock is held; boto3's 60s default would
+    freeze tracking for a minute on a stalled network."""
+    pytest.importorskip("botocore", reason='needs the [cloud] extra')
+    captured = {}
+
+    class FakeBoto:
+        @staticmethod
+        def client(service, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    import sys
+    monkeypatch.setitem(sys.modules, "boto3", FakeBoto)
+    SnapshotStore("snapshots", s3_bucket="b")._client()
+    cfg = captured.get("config")
+    assert cfg is not None, "no botocore Config passed; timeouts stay at 60s"
+    assert cfg.connect_timeout <= 10 and cfg.read_timeout <= 15

@@ -127,12 +127,35 @@ def test_dashboard_exposes_the_system_check(client):
 # ------------------------------------------------------------ object storage
 
 
-def test_bucket_without_endpoint_warns_about_r2(clean_env, monkeypatch):
-    """The endpoint is what makes an S3 client talk to R2. Without one, boto3
-    quietly talks to Amazon instead - a bucket name that means nothing there."""
+def test_bucket_without_endpoint_notes_that_it_means_aws(clean_env, monkeypatch):
+    """Amazon is a legitimate choice, so this is a note - but someone who meant
+    R2 and forgot the endpoint gets the hint they need."""
     monkeypatch.setenv("STRIKEE_S3_BUCKET", "strikee-snaps")
+    from app.diagnostics import config_report, warnings as warn
+    perception = {"torch": "2.0.1", "opencv": "4.9", "numpy": "1.26",
+                  "ultralytics": "8.3", "libsql": None, "ready": True}
+    models = [{"role": "snooker", "path": "best.pt", "exists": True, "size_mb": 6.0}]
+    hits = [w for w in warn(config_report(), perception, models)
+            if "go to Amazon S3" in w["text"]]
+    assert hits and hits[0]["level"] == "info"
+    assert "r2.cloudflarestorage.com" in hits[0]["text"]
+
+
+def test_aws_bucket_without_region_warns(clean_env, monkeypatch):
+    """'auto' would have been sent to AWS and resolved to nothing."""
+    monkeypatch.setenv("STRIKEE_S3_BUCKET", "strikee-snaps")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    assert any("no region is configured" in t for t in _warn_texts())
+
+
+def test_aws_bucket_with_region_and_credentials_is_quiet(clean_env, monkeypatch):
+    monkeypatch.setenv("STRIKEE_S3_BUCKET", "strikee-snaps")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-south-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKE")
     texts = _warn_texts()
-    assert any("go to Amazon S3" in t and "r2.cloudflarestorage.com" in t for t in texts)
+    assert not any("no region is configured" in t for t in texts)
+    assert not any("no AWS credentials" in t for t in texts)
 
 
 def test_snapshot_bucket_accepts_the_backup_endpoint(clean_env, monkeypatch):

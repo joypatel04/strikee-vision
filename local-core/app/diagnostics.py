@@ -277,9 +277,28 @@ def warnings(cfg: list[dict], perception: dict, models: list[dict]) -> list[dict
         if bucket_knob == "STRIKEE_S3_BUCKET" and not endpoint_set:
             endpoint_set = _is_set("STRIKEE_BACKUP_ENDPOINT")
         if not endpoint_set:
-            warn("warn", f"{bucket_knob} has no endpoint, so {what} go to Amazon S3. "
-                         f"For Cloudflare R2 set {endpoint_knob} to "
+            # Going to Amazon is a legitimate choice, so this is a note, not a
+            # complaint - but someone who meant R2 and forgot the endpoint would
+            # otherwise get no hint at all.
+            warn("info", f"{bucket_knob} has no endpoint set, so {what} go to Amazon "
+                         f"S3. For Cloudflare R2 instead, set {endpoint_knob} to "
                          "https://<account-id>.r2.cloudflarestorage.com")
+            # Real AWS needs a real region - "auto" is an R2 convention and
+            # resolves to nothing on AWS.
+            region_knob = ("STRIKEE_S3_REGION" if bucket_knob == "STRIKEE_S3_BUCKET"
+                           else "STRIKEE_BACKUP_REGION")
+            has_region = (_is_set(region_knob)
+                          or os.environ.get("AWS_DEFAULT_REGION")
+                          or os.environ.get("AWS_REGION"))
+            if not has_region:
+                warn("warn", f"{bucket_knob} is set for Amazon S3 but no region is "
+                             f"configured. Set AWS_DEFAULT_REGION (e.g. ap-south-1) "
+                             f"or {region_knob}, or uploads will fail to resolve.")
+            if not (os.environ.get("AWS_ACCESS_KEY_ID")
+                    or os.environ.get("AWS_PROFILE")):
+                warn("warn", f"{bucket_knob} is set but no AWS credentials are in the "
+                             "environment. Set AWS_ACCESS_KEY_ID and "
+                             "AWS_SECRET_ACCESS_KEY in .env.")
 
     if _is_set("TURSO_DATABASE_URL") and _is_set("STRIKEE_BACKUP_BUCKET"):
         warn("info", "Turso sync and database backups are both on. Turso already keeps "

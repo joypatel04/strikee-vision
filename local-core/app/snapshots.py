@@ -42,8 +42,14 @@ class SnapshotStore:
         # get it wrong.
         self.s3_endpoint = (s3_endpoint or os.environ.get("STRIKEE_S3_ENDPOINT")
                             or os.environ.get("STRIKEE_BACKUP_ENDPOINT"))
-        self.s3_region = (s3_region or os.environ.get("STRIKEE_S3_REGION")
-                          or os.environ.get("STRIKEE_BACKUP_REGION") or "auto")
+        # Region: "auto" is an R2 convention and is NOT a valid AWS region -
+        # boto3 would try to reach s3.auto.amazonaws.com and fail. So only
+        # default to it when an endpoint says we are talking to something
+        # R2-shaped; for real S3, leave it unset and let boto3 resolve the
+        # region the normal way (AWS_DEFAULT_REGION, or the shared config).
+        explicit = (s3_region or os.environ.get("STRIKEE_S3_REGION")
+                    or os.environ.get("STRIKEE_BACKUP_REGION"))
+        self.s3_region = explicit or ("auto" if self.s3_endpoint else None)
         # Upload is best-effort, so failures must be visible somewhere or they
         # are invisible everywhere.
         self.uploads_ok = 0
@@ -77,9 +83,24 @@ class SnapshotStore:
 
     def _client(self):
         import boto3  # lazy, optional dependency
-        kwargs = {"region_name": self.s3_region}
+
+        kwargs = {}
+        if self.s3_region:
+            kwargs["region_name"] = self.s3_region
         if self.s3_endpoint:
             kwargs["endpoint_url"] = self.s3_endpoint
+        try:
+            from botocore.config import Config
+            # boto3 defaults to 60s connect and read timeouts. Upload happens
+            # inline while the processing lock is held, so a stalled network
+            # would freeze the whole pipeline for a minute per image. Bound it:
+            # an evidence upload is never worth blocking tracking for.
+            kwargs["config"] = Config(
+                connect_timeout=5, read_timeout=10,
+                retries={"max_attempts": 2, "mode": "standard"},
+            )
+        except Exception:
+            pass
         return boto3.client("s3", **kwargs)
 
     def _maybe_upload(self, path: Path, key: str) -> None:
@@ -98,7 +119,7 @@ class SnapshotStore:
             "enabled": bool(self.s3_bucket),
             "bucket": self.s3_bucket,
             "endpoint": self.s3_endpoint or "AWS S3 (no endpoint set)",
-            "region": self.s3_region,
+            "region": self.s3_region or "resolved by boto3 (AWS_DEFAULT_REGION)",
             "uploaded": self.uploads_ok,
             "failed": self.uploads_failed,
             "last_error": self.last_upload_error,
