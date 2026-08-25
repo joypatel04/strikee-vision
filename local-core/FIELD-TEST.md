@@ -221,6 +221,21 @@ strikee-core
 
 **Sync health is visible.** The dashboard header shows a badge — **`☁ synced 12s ago`** (green) when tracking data is reaching the cloud, or **`⚠ NOT syncing`** (red) if it stalls — so you'd notice immediately if data stopped flowing. Also at `GET /api/sync-health`. (Hidden entirely on local-only sqlite3.)
 
+**If sync fails, ask Turso directly.** The client's own errors are hard to read -
+a wrong hostname and a wrong token look similar from inside it:
+
+```
+.venv\Scripts\python.exe tools\turso_check.py libsql://your-db-org.turso.io <token>
+```
+
+- **404 / "Host not found"** - no database at that hostname. The URL is wrong, the
+  database was deleted, or it is in a different Turso organisation. Note that
+  `nslookup` succeeding proves nothing: `*.turso.io` is wildcard DNS, so every
+  hostname resolves whether or not it exists.
+- **401 / 403** - the database exists but the token is not valid for it. Use a
+  **database** auth token from the Connect panel, not a platform API token.
+- **200** - both are fine and the problem is elsewhere.
+
 **Verify offline writes before you trust it (important):** with Turso set,
 start `strikee-core`, **disconnect the internet**, and confirm games still get
 recorded (the local replica should accept writes). Reconnect and confirm they
