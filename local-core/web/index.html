@@ -53,6 +53,32 @@
     .b-corrected { color: #60a5fa; border-color: #294a73; }
     .b-voided { color: #8b93a1; text-decoration: line-through; }
     .mini { font-size: 11px; padding: 3px 8px; }
+    details.diag { margin-top: 24px; border: 1px solid #232833; border-radius: 10px;
+                   background: #12161c; }
+    details.diag > summary { cursor: pointer; padding: 12px 16px; font-size: 13px;
+                   text-transform: uppercase; letter-spacing: .04em; color: #8b93a1; }
+    details.diag > summary:hover { color: #e6e9ef; }
+    .diag-body { padding: 0 16px 16px; }
+    .diag h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+               color: #8b93a1; margin: 18px 0 8px; }
+    .diag table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .diag th { text-align: left; color: #8b93a1; font-weight: 500; padding: 6px 8px;
+               border-bottom: 1px solid #232833; white-space: nowrap; }
+    .diag td { padding: 6px 8px; border-bottom: 1px solid #1a1f27;
+               vertical-align: top; }
+    .diag td.k { font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
+    .diag td.v { font-family: ui-monospace, Menlo, monospace; color: #e6e9ef;
+                 white-space: nowrap; }
+    .diag td.d { color: #8b93a1; }
+    .src-environment { color: #22c55e; border-color: #245e37; }
+    .src-default { color: #8b93a1; }
+    .src-unset { color: #4b5563; }
+    .w { padding: 9px 12px; border-radius: 8px; margin-bottom: 6px; font-size: 12.5px;
+         border: 1px solid #232833; }
+    .w-error { border-color: #7f1d1d; background: #1c1113; color: #fca5a5; }
+    .w-warn  { border-color: #78350f; background: #1b1610; color: #fcd34d; }
+    .w-info  { border-color: #232833; color: #8b93a1; }
+    .diag .scroll { overflow-x: auto; }
     .ts { color: #8b93a1; font-size: 11px; }
   </style>
 </head>
@@ -92,6 +118,11 @@
         <div id="games"></div>
       </div>
     </div>
+
+    <details class="diag" id="diag">
+      <summary>System check &mdash; is everything actually configured?</summary>
+      <div class="diag-body" id="diagBody">Open to load.</div>
+    </details>
   </main>
 
   <script>
@@ -279,6 +310,109 @@
       loadGames();
     }
 
+
+    function esc(v) {
+      return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    const DIAG_GROUPS = [
+      ['capture', 'Capture &amp; streams'], ['state', 'Occupancy timing'],
+      ['snooker', 'Game counting'], ['models', 'Models'],
+      ['storage', 'Storage'], ['cloud', 'Cloud'], ['runtime', 'Unattended run'],
+    ];
+
+    async function loadDiagnostics() {
+      const el = document.getElementById('diagBody');
+      let d;
+      try {
+        d = await (await fetch('/api/diagnostics')).json();
+      } catch (e) {
+        el.innerHTML = '<div class="w w-error">Could not load diagnostics.</div>';
+        return;
+      }
+      const out = [];
+
+      out.push(d.warnings.map(w =>
+        `<div class="w w-${esc(w.level)}">${esc(w.text)}</div>`).join(''));
+
+      const p = d.perception;
+      out.push('<h3>This machine</h3><div class="scroll"><table><tbody>');
+      out.push(`<tr><td class="k">python</td><td class="v">${esc(p ? d.host.python : '')}</td>
+                    <td class="d">${esc(d.host.platform)}</td></tr>`);
+      for (const lib of ['torch', 'numpy', 'opencv', 'ultralytics', 'libsql']) {
+        const v = p[lib];
+        out.push(`<tr><td class="k">${lib}</td>
+          <td class="v">${v ? esc(v) : '<span class="src-unset">not installed</span>'}</td>
+          <td class="d"></td></tr>`);
+      }
+      for (const m of d.models) {
+        out.push(`<tr><td class="k">${esc(m.role)} model</td>
+          <td class="v">${m.exists ? esc(m.size_mb) + ' MB' : '<span class="src-unset">MISSING</span>'}</td>
+          <td class="d">${esc(m.path)}</td></tr>`);
+      }
+      out.push(`<tr><td class="k">database</td><td class="v">${esc(d.database.path)}</td>
+                    <td class="d">${d.database.sync ? 'cloud sync on' : 'local only'}</td></tr>`);
+      out.push('</tbody></table></div>');
+
+      // Live capture health, only meaningful while a pipeline runs.
+      for (const v of d.running) {
+        if (v.cameras.length) {
+          out.push('<h3>Cameras (live)</h3><div class="scroll"><table><thead><tr>' +
+            '<th>Source</th><th>Every</th><th>Last try</th><th>Failures</th></tr></thead><tbody>');
+          for (const c of v.cameras) {
+            const bad = c.consecutive_failures > 0;
+            out.push(`<tr><td class="k">${esc(c.source_id).slice(0, 12)}</td>
+              <td class="v">${esc(c.interval_sec)}s${bad ? ' &rarr; ' + esc(c.effective_interval_sec) + 's' : ''}</td>
+              <td class="v">${c.last_started_ago_sec == null ? '&mdash;' : esc(c.last_started_ago_sec) + 's ago'}</td>
+              <td class="v" style="${bad ? 'color:#fca5a5' : ''}">${esc(c.consecutive_failures)}</td></tr>`);
+          }
+          out.push('</tbody></table></div>');
+        }
+        if (v.assets.length) {
+          out.push('<h3>Occupancy windows in effect</h3><div class="scroll">' +
+            '<table><thead><tr><th>Asset</th><th>Sampled</th>' +
+            '<th>Frees up after</th><th>Occupied after</th></tr></thead><tbody>');
+          for (const a of v.assets) {
+            out.push(`<tr><td>${esc(a.asset)}</td>
+              <td class="v">${a.interval_sec == null ? '&mdash;' : 'every ' + esc(a.interval_sec) + 's'}</td>
+              <td class="v">${a.exit_window_sec == null ? esc(a.exit_reads) + ' reads' :
+                   esc(a.exit_window_sec) + 's (' + esc(a.exit_reads) + ' reads)'}</td>
+              <td class="v">${a.enter_window_sec == null ? esc(a.enter_reads) + ' reads' :
+                   esc(a.enter_window_sec) + 's (' + esc(a.enter_reads) + ' reads)'}</td></tr>`);
+          }
+          out.push('</tbody></table></div>');
+        }
+      }
+      if (!d.running.length) {
+        out.push('<h3>Cameras</h3><div class="muted">Start the pipeline to see live ' +
+                 'capture health and the occupancy windows each asset ends up with.</div>');
+      }
+
+      // Settings, grouped. "environment" means it really reached this process -
+      // which is the whole question on Windows, where `set` is per-window.
+      out.push('<h3>Settings</h3><div class="muted" style="margin-bottom:8px">' +
+        'Green = read from the environment. Grey = built-in default, i.e. your ' +
+        '<code>set</code> did not reach this process.</div>');
+      out.push('<div class="scroll"><table><thead><tr><th>Setting</th><th>In effect</th>' +
+               '<th>From</th><th>What it does</th></tr></thead><tbody>');
+      for (const [g, title] of DIAG_GROUPS) {
+        const rows = d.config.filter(c => c.group === g);
+        if (!rows.length) continue;
+        out.push(`<tr><td colspan="4" style="color:#8b93a1;padding-top:12px">${title}</td></tr>`);
+        for (const c of rows) {
+          const val = c.error ? `<span style="color:#fca5a5">${esc(c.error)}</span>`
+                    : (c.value == null ? '<span class="src-unset">unset</span>' : esc(c.value));
+          out.push(`<tr><td class="k">${esc(c.name)}</td><td class="v">${val}</td>
+            <td><span class="badge src-${esc(c.source)}">${esc(c.source)}</span></td>
+            <td class="d">${esc(c.description)}</td></tr>`);
+        }
+      }
+      out.push('</tbody></table></div>');
+
+      el.innerHTML = out.join('');
+    }
+
     async function init() {
       const h = await (await fetch('/health')).json();
       document.getElementById('dot').classList.add('ok');
@@ -332,11 +466,18 @@
         location.reload();
       };
 
+      const diag = document.getElementById('diag');
+      diag.addEventListener('toggle', () => { if (diag.open) loadDiagnostics(); });
+
       if (venues.length) selectVenue(venues[0].id);
       else document.getElementById('empty').textContent =
         'No venues yet. Run field_setup.py to draw zones and create one.';
       refreshSync();
-      setInterval(() => { refreshStatus(); refreshSync(); loadSessions(); loadEvents(); loadAnalytics(); loadNotifications(); loadGames(); }, 5000);
+      setInterval(() => {
+        refreshStatus(); refreshSync(); loadSessions(); loadEvents();
+        loadAnalytics(); loadNotifications(); loadGames();
+        if (document.getElementById('diag').open) loadDiagnostics();
+      }, 5000);
     }
     init();
   </script>

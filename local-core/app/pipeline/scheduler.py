@@ -152,6 +152,31 @@ class CaptureSchedule:
         with self._lock:
             return self._fails.get(sid, 0)
 
+    def snapshot(self, now: Optional[float] = None) -> list[dict]:
+        """Per-source capture health, for the diagnostics panel: what rate each
+        camera is on, whether it is failing, and how long since it was tried."""
+        if now is None:
+            now = self._clock()
+        with self._lock:
+            out = []
+            for sid, interval in self._interval.items():
+                started = self._started_at[sid]
+                fails = self._fails.get(sid, 0)
+                effective = interval
+                if fails:
+                    effective = min(self._max_backoff,
+                                    interval * (self._backoff_factor ** fails))
+                out.append({
+                    "source_id": sid,
+                    "interval_sec": interval,
+                    "effective_interval_sec": round(effective, 1),
+                    "consecutive_failures": fails,
+                    "in_flight": sid in self._inflight,
+                    "last_started_ago_sec": (None if started is None
+                                             else round(now - started, 1)),
+                })
+            return out
+
     def wait_time(self, now: Optional[float] = None) -> float:
         """Seconds until the next source is due. 0 if something is due now.
         A small floor when the cap is full (we're waiting on a completion, not
@@ -244,6 +269,10 @@ class ThreadedCapturePool:
                     self._on_frame(sid, ok, frame)
             except Exception:
                 pass  # one bad frame must never kill a worker
+
+    def status(self) -> list[dict]:
+        """Per-source capture health from the underlying schedule."""
+        return self._schedule.snapshot()
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()

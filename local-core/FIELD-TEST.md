@@ -380,6 +380,34 @@ separate terminal), then delete it after:
 ffmpeg -i "rtsp://USER:PASS@CAM_IP:554/stream1" -c copy -t 7200 test_recording.mp4
 ```
 
+## System check — proving your settings actually applied
+
+On Windows, `set STRIKEE_EXIT_SEC=120` applies **only to the window you typed it
+in**. Launch `strikee-core` from a different PowerShell, a shortcut or Task
+Scheduler and it runs on defaults instead — nothing looks wrong, the numbers are
+just someone else's.
+
+The dashboard has a **System check** panel at the bottom. Open it and read three
+things:
+
+1. **Warnings** at the top — configurations that are individually valid but
+   wrong together (`MAX_STREAMS` above the DVR's limit, Turso set without its
+   token, a missing model, seconds and ticks both set).
+2. **Settings** — every knob with its value and a **From** badge.
+   **Green `environment`** means it really reached this process. **Grey
+   `default`** means your `set` did not — that is the answer to "is my env
+   working?".
+3. **Occupancy windows in effect** (while the pipeline runs) — the grace window
+   each asset actually ended up with, in seconds *and* reads. A table sampled
+   every 13s with `STRIKEE_EXIT_SEC=120` shows `117s (9 reads)`; a station
+   sampled every 5s shows `120s (24 reads)`. Same setting, correctly converted.
+
+It also shows the live camera table: each source's rate, seconds since its last
+attempt, and consecutive failures — a camera being backed off shows its stretched
+interval, so a dead feed is obvious rather than mysterious.
+
+Also at `GET /api/diagnostics` if you'd rather read JSON.
+
 ## Tuning (no code edits — set env vars, then restart `strikee-core`)
 
 | Symptom | Knob | Try |

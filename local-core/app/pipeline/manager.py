@@ -153,6 +153,22 @@ class RuntimeManager:
             self.run_runtime(venue_id, rt)
         return self.status(venue_id)
 
+    def capture_status(self, venue_id: str) -> list[dict]:
+        """Per-camera capture health for a running venue ([] when stopped)."""
+        pool = self._pools.get(venue_id)
+        if pool is None or not hasattr(pool, "status"):
+            return []
+        try:
+            return pool.status()
+        except Exception:
+            return []
+
+    def running_venues(self) -> list[str]:
+        return list(self._runtimes)
+
+    def runtime_for(self, venue_id: str):
+        return self._runtimes.get(venue_id)
+
     def _stream_budget(self, k: int):
         """One connection budget shared by every running venue.
 

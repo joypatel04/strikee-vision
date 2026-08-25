@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .admin import purge_venue, rename_venue, venue_contents
 from .api import all_routers
+from .diagnostics import build as build_diagnostics
 from .db import Database
 from .entities import REGISTRY
 from .pipeline.broadcast import Broadcaster
@@ -141,6 +142,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
         """Cloud-sync health — the dashboard shows 'synced Xs ago' and warns if
         tracking data stops reaching the cloud."""
         return app.state.db.sync_status()
+
+    @app.get("/api/diagnostics")
+    def diagnostics():
+        """What is actually in effect: config with its source, model files,
+        perception stack, per-camera capture health and per-asset windows."""
+        return build_diagnostics(app.state.db, app.state.runtime, __version__)
 
     def _snapshot_dir() -> str:
         return os.environ.get("STRIKEE_SNAPSHOT_DIR", "snapshots")
