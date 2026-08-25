@@ -204,3 +204,139 @@ def test_process_and_evaluate_detects_game_like_tick():
     starts = [e for e in EventStore(db).list("v1") if e["type"] == "game_start"]
     assert len(starts) == 1
     db.close()
+
+
+# --------------------------------------------------------------------- backoff
+
+
+def test_failing_source_backs_off_and_recovers():
+    """A wedged camera must not cost a lane every rotation. Each consecutive
+    failure doubles its wait; one success clears it."""
+    clk = FakeClock()
+    sch = CaptureSchedule({"a": 10.0}, max_concurrent=1, clock=clk,
+                          backoff_factor=2.0, max_backoff=120.0)
+
+    assert sch.due() == "a"
+    sch.complete("a", ok=False)          # 1 failure -> next wait 20s
+    assert sch.failures("a") == 1
+    clk.advance(10.5)
+    assert sch.due() is None, "backed-off source came due at the normal interval"
+    clk.advance(10.0)                    # t=20.5
+    assert sch.due() == "a"
+
+    sch.complete("a", ok=False)          # 2 failures -> 40s
+    assert sch.failures("a") == 2
+    clk.advance(20.5)
+    assert sch.due() is None
+    clk.advance(20.0)
+    assert sch.due() == "a"
+
+    sch.complete("a", ok=True)           # recovered -> back to 10s
+    assert sch.failures("a") == 0
+    clk.advance(10.5)
+    assert sch.due() == "a"
+
+
+def test_backoff_is_capped():
+    clk = FakeClock()
+    sch = CaptureSchedule({"a": 10.0}, max_concurrent=1, clock=clk,
+                          backoff_factor=2.0, max_backoff=30.0)
+    for _ in range(8):                   # would be 10 * 2^8 = 2560s uncapped
+        sch.due()
+        sch.complete("a", ok=False)
+        clk.advance(30.1)
+    assert sch.due() == "a", "cap not honoured; a dead camera would never retry"
+
+
+def test_healthy_source_keeps_its_interval_while_another_fails():
+    """One dead camera must not slow down the working ones."""
+    clk = FakeClock()
+    sch = CaptureSchedule({"dead": 5.0, "live": 5.0}, max_concurrent=2, clock=clk)
+    assert sch.due() in ("dead", "live")
+    assert sch.due() in ("dead", "live")
+    sch.complete("dead", ok=False)
+    sch.complete("live", ok=True)
+
+    clk.advance(5.1)
+    due = [sch.due(), sch.due()]
+    assert "live" in due
+    assert "dead" not in due
+
+
+def test_default_complete_still_counts_as_success():
+    """Existing callers pass no ok= and must not accrue backoff."""
+    sch = CaptureSchedule({"a": 1.0}, max_concurrent=1)
+    sch.due()
+    sch.complete("a")
+    assert sch.failures("a") == 0
+
+
+# ---------------------------------------------------------------- shared budget
+
+
+def test_shared_budget_caps_concurrency_across_two_pools():
+    """Each pool caps only itself. Two venues at K=2 would open four streams
+    against a DVR that drops them at four - so the budget is shared."""
+    budget = threading.BoundedSemaphore(2)
+    peak = 0
+    live = 0
+    lock = threading.Lock()
+
+    def grab(uri):
+        nonlocal peak, live
+        with lock:
+            live += 1
+            peak = max(peak, live)
+        time.sleep(0.02)
+        with lock:
+            live -= 1
+        return True, object()
+
+    pools = []
+    for venue in ("v1", "v2"):
+        ids = {f"{venue}-{i}": 0.0 for i in range(3)}
+        sch = CaptureSchedule(ids, max_concurrent=2)
+        pools.append(ThreadedCapturePool(
+            sch, {sid: "rtsp://x" for sid in ids}, grab,
+            lambda sid, ok, frame: None, budget=budget))
+
+    for p in pools:
+        p.start()
+    time.sleep(0.5)
+    for p in pools:
+        p.stop(timeout=2)
+
+    assert peak <= 2, f"shared budget exceeded: {peak} concurrent grabs"
+    assert peak >= 1
+
+
+def test_pool_without_budget_is_unchanged():
+    """budget=None keeps the previous behaviour for existing callers."""
+    seen = []
+    sch = CaptureSchedule({"a": 0.0}, max_concurrent=1)
+    pool = ThreadedCapturePool(sch, {"a": "rtsp://x"},
+                               lambda uri: (True, "frame"),
+                               lambda sid, ok, frame: seen.append((sid, ok)))
+    pool.start()
+    time.sleep(0.2)
+    pool.stop(timeout=2)
+    assert seen and all(ok for _, ok in seen)
+
+
+def test_pool_reports_grab_failure_as_backoff():
+    """A grab that raises is skipped, frees its slot, and counts as a failure -
+    the camera is simply picked up again on a later rotation."""
+    sch = CaptureSchedule({"a": 0.0}, max_concurrent=1)
+
+    def boom(uri):
+        raise RuntimeError("stream timeout")
+
+    got = []
+    pool = ThreadedCapturePool(sch, {"a": "rtsp://x"}, boom,
+                               lambda sid, ok, frame: got.append(ok))
+    pool.start()
+    time.sleep(0.2)
+    pool.stop(timeout=2)
+
+    assert got and got[0] is False, "a failed grab should reach on_frame as ok=False"
+    assert sch.failures("a") >= 1, "failure not recorded, so no backoff would apply"

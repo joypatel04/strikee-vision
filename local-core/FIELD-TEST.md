@@ -366,7 +366,8 @@ ffmpeg -i "rtsp://USER:PASS@CAM_IP:554/stream1" -c copy -t 7200 test_recording.m
 | "Active" vs "Idle" wrong | `STRIKEE_MOTION_THRESHOLD`, `STRIKEE_STILL_TICKS` | tune threshold / still ticks |
 | Sampling too slow/fast | `STRIKEE_TICK_SEC` | 5–10 (legacy tick loop only) |
 | Use a different snooker model | `STRIKEE_SNOOKER_MODEL` | path to a `.pt` |
-| DVR drops streams under load | `STRIKEE_MAX_STREAMS` | max concurrent connections (default **3** — measured safe on the club Dahua; 4 dropped) |
+| DVR drops streams under load | `STRIKEE_MAX_STREAMS` | max concurrent connections (default **3** — measured safe on the club Dahua; 4 dropped). This is now a **process-wide** budget shared by every running venue, not a per-venue cap. |
+| A dead camera slows the working ones | *(automatic)* | a source that fails backs off exponentially (interval x2 per failure, capped 120s) and returns to its normal rate after one success — so an unplugged camera stops costing a lane every rotation |
 | Snooker tables sampled too slow/fast | `STRIKEE_RATE_TABLE` | seconds between grabs per table (default **13**) |
 | Gaming-zone cameras sampled too slow/fast | `STRIKEE_RATE_GAMING` | seconds per grab (default **5**) |
 | Entry/footfall cameras sampled too slow/fast | `STRIKEE_RATE_ENTRY` | seconds per grab (default **3**) |

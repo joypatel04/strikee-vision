@@ -65,13 +65,17 @@ class CaptureSchedule:
     """
 
     def __init__(self, intervals: dict[str, float], max_concurrent: int = 3,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 backoff_factor: float = 2.0, max_backoff: float = 120.0):
         if max_concurrent < 1:
             raise ValueError("max_concurrent must be >= 1")
         self._interval = {sid: float(iv) for sid, iv in intervals.items()}
         self._k = max_concurrent
         self._clock = clock
+        self._backoff_factor = backoff_factor
+        self._max_backoff = max_backoff
         self._started_at: dict[str, Optional[float]] = {sid: None for sid in self._interval}
+        self._fails: dict[str, int] = {sid: 0 for sid in self._interval}
         self._inflight: set[str] = set()
         self._lock = threading.Lock()
 
@@ -84,8 +88,23 @@ class CaptureSchedule:
         return list(self._interval)
 
     def _ready_at(self, sid: str) -> float:
+        """When this source may next be grabbed.
+
+        A source that keeps failing is pushed further out each time
+        (interval x factor^failures, capped). An unplugged or wedged camera
+        otherwise costs a full lane on every rotation - and a dead RTSP host
+        blocks for the ffmpeg timeout, tens of seconds, starving the cameras
+        that do work. One success clears it back to the normal interval.
+        """
         started = self._started_at[sid]
-        return 0.0 if started is None else started + self._interval[sid]
+        if started is None:
+            return 0.0
+        interval = self._interval[sid]
+        fails = self._fails.get(sid, 0)
+        if fails:
+            interval = min(self._max_backoff,
+                           interval * (self._backoff_factor ** fails))
+        return started + interval
 
     def due(self, now: Optional[float] = None) -> Optional[str]:
         """Claim the most-overdue idle source that is due, if under the cap.
@@ -117,10 +136,21 @@ class CaptureSchedule:
                 self._started_at[best] = now
             return best
 
-    def complete(self, sid: str, now: Optional[float] = None) -> None:
-        """Mark a grab finished, freeing a concurrency slot."""
+    def complete(self, sid: str, ok: bool = True, now: Optional[float] = None) -> None:
+        """Mark a grab finished, freeing a concurrency slot.
+
+        `ok=False` counts a failure and lengthens this source's next wait; a
+        success resets it. Capped at 16 so the exponent can never run away.
+        """
         with self._lock:
             self._inflight.discard(sid)
+            if sid in self._fails:
+                self._fails[sid] = 0 if ok else min(self._fails[sid] + 1, 16)
+
+    def failures(self, sid: str) -> int:
+        """Consecutive failed grabs for a source (0 when healthy)."""
+        with self._lock:
+            return self._fails.get(sid, 0)
 
     def wait_time(self, now: Optional[float] = None) -> float:
         """Seconds until the next source is due. 0 if something is due now.
@@ -158,7 +188,9 @@ class ThreadedCapturePool:
         serialize_processing: bool = True,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        budget: Optional["threading.BoundedSemaphore"] = None,
     ):
+        self._budget = budget
         self._schedule = schedule
         self._uris = uris
         self._grab = grab
@@ -179,8 +211,16 @@ class ThreadedCapturePool:
 
     def _worker(self) -> None:
         while not self._stop.is_set():
+            # The budget, when shared, is what actually caps DVR connections
+            # across every running venue - each pool's own K only caps itself.
+            # Taken before claiming a source and released the moment the grab
+            # ends, so it is never held across the (much longer) processing.
+            if self._budget is not None and not self._budget.acquire(timeout=0.2):
+                continue
             sid = self._schedule.due()
             if sid is None:
+                if self._budget is not None:
+                    self._budget.release()
                 self._sleep(min(0.5, max(0.02, self._schedule.wait_time())))
                 continue
             ok, frame = False, None
@@ -189,7 +229,11 @@ class ThreadedCapturePool:
             except Exception:
                 ok, frame = False, None
             finally:
-                self._schedule.complete(sid)
+                # A failed grab is normal: the camera is skipped, its slot is
+                # freed, and it comes round again (later each time it fails).
+                self._schedule.complete(sid, ok=ok)
+                if self._budget is not None:
+                    self._budget.release()
             if self._stop.is_set():
                 break
             try:

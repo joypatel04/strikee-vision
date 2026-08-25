@@ -11,11 +11,12 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from .admin import purge_venue, rename_venue, venue_contents
 from .api import all_routers
 from .db import Database
 from .entities import REGISTRY
@@ -140,6 +141,46 @@ def create_app(db_path: str | None = None) -> FastAPI:
         """Cloud-sync health — the dashboard shows 'synced Xs ago' and warns if
         tracking data stops reaching the cloud."""
         return app.state.db.sync_status()
+
+    def _snapshot_dir() -> str:
+        return os.environ.get("STRIKEE_SNAPSHOT_DIR", "snapshots")
+
+    # --- venue administration ---------------------------------------------
+    # Registered BEFORE the generic CRUD routers so this DELETE wins the route
+    # match. The generic one drops only the venue row, leaving every event and
+    # session behind to skew venue-scoped queries forever.
+
+    @app.get("/api/venues/{venue_id}/contents")
+    def venue_contents_route(venue_id: str):
+        """What deleting this venue would remove. Lets the UI ask a specific
+        question instead of a vague one."""
+        info = venue_contents(app.state.db, venue_id, _snapshot_dir())
+        if info is None:
+            raise HTTPException(404, "venue not found")
+        return info
+
+    @app.delete("/api/venues/{venue_id}")
+    async def venue_delete_route(venue_id: str):
+        """Delete a venue, its config, its history and its snapshots."""
+        # Stop first: a running pipeline holds camera threads and would keep
+        # writing events for a venue that no longer exists.
+        if app.state.runtime.is_running(venue_id):
+            await app.state.runtime.stop(venue_id)
+        result = purge_venue(app.state.db, venue_id, _snapshot_dir())
+        if result is None:
+            raise HTTPException(404, "venue not found")
+        return result
+
+    @app.post("/api/venues/{venue_id}/rename")
+    def venue_rename_route(venue_id: str, name: str = Body(..., embed=True)):
+        """Rename a venue and the organization created alongside it."""
+        try:
+            result = rename_venue(app.state.db, venue_id, name)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        if result is None:
+            raise HTTPException(404, "venue not found")
+        return result
 
     for router in all_routers():
         app.include_router(router)

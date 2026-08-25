@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from typing import Optional
 
 from ..notify import NotificationEngine
@@ -35,6 +36,8 @@ class RuntimeManager:
         self._runtimes: dict[str, LiveRuntime] = {}
         self._tasks: dict[str, asyncio.Task] = {}
         self._pools: dict[str, object] = {}   # venue_id -> ThreadedCapturePool
+        self._budget = None                   # process-wide DVR connection cap
+        self._budget_k = 0
 
     def get(self, venue_id: str) -> Optional[LiveRuntime]:
         return self._runtimes.get(venue_id)
@@ -139,6 +142,19 @@ class RuntimeManager:
             self.run_runtime(venue_id, rt)
         return self.status(venue_id)
 
+    def _stream_budget(self, k: int):
+        """One connection budget shared by every running venue.
+
+        Each pool caps only itself, so two venues at K=3 would open six
+        simultaneous streams - and this DVR was measured to drop them at four.
+        The cap belongs to the DVR, not to a venue, so it lives here and every
+        pool draws from it.
+        """
+        if self._budget is None or self._budget_k != k:
+            self._budget = threading.BoundedSemaphore(k)
+            self._budget_k = k
+        return self._budget
+
     def _start_scheduler(self, venue_id, rt, CaptureSchedule, ThreadedCapturePool,
                          source_intervals, grab_once) -> None:
         """Run a venue's capture on the K-slot rotating scheduler. Each grabbed
@@ -169,7 +185,8 @@ class RuntimeManager:
                     self._bcast.broadcast(venue_id, changed), loop)
 
         schedule = CaptureSchedule(intervals, max_concurrent=k)
-        pool = ThreadedCapturePool(schedule, uris, grab_once, on_frame)
+        pool = ThreadedCapturePool(schedule, uris, grab_once, on_frame,
+                                   budget=self._stream_budget(k))
         self._runtimes[venue_id] = rt
         self._pools[venue_id] = pool
         pool.start()

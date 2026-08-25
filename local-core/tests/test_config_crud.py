@@ -112,13 +112,20 @@ def test_sensor_references_asset_source_zone(client):
 
 
 def test_cascade_delete_venue_removes_children(client):
-    """FK ON DELETE CASCADE: deleting a Venue removes its Spaces/Assets etc."""
+    """Deleting a Venue removes its config tree via FK ON DELETE CASCADE.
+
+    The venue route answers 200 with a report of what it removed, not a bare
+    204 - a destructive action should say what it destroyed.
+    """
     org = _org(client)
     v = _venue(client, org["id"])
     space = client.post("/api/spaces", json={"venue_id": v["id"], "name": "Area"}).json()
 
     assert len(client.get("/api/spaces").json()) == 1
-    assert client.delete(f"/api/venues/{v['id']}").status_code == 204
+    resp = client.delete(f"/api/venues/{v['id']}")
+    assert resp.status_code == 200
+    assert resp.json()["removed"]["venues"] == 1
     # child space is gone via cascade
     assert client.get(f"/api/spaces/{space['id']}").status_code == 404
     assert len(client.get("/api/spaces").json()) == 0
+    assert client.delete(f"/api/venues/{v['id']}").status_code == 404

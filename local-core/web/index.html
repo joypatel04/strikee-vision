@@ -33,6 +33,8 @@
     .s-idle      { border-left-color: #f0b429; }
     .s-degraded  { border-left-color: #f97316; }
     .s-unknown   { border-left-color: #6b7280; }
+    button.danger { border-color: #a33; color: #d66; }
+    button.danger:hover { background: #a33; color: #fff; }
     .statusbar { display: flex; align-items: center; gap: 14px; font-size: 12px;
                  color: #8b93a1; margin-top: 4px; flex-wrap: wrap; }
     .panels { display: grid; gap: 16px; margin-top: 24px;
@@ -64,6 +66,8 @@
     <select id="venueSelect"></select>
     <button id="startBtn">Start pipeline</button>
     <button id="stopBtn">Stop</button>
+    <button id="renameBtn" title="Rename this venue">Rename</button>
+    <button id="deleteBtn" class="danger" title="Delete this venue and all its data">Delete</button>
   </header>
   <main>
     <div class="statusbar" id="statusbar"></div>
@@ -294,9 +298,43 @@
         refreshStatus();
       };
 
+      document.getElementById('renameBtn').onclick = async () => {
+        const current = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+        const name = prompt('New name for this venue:', current);
+        if (!name || !name.trim() || name === current) return;
+        const r = await fetch(`/api/venues/${currentVenue}/rename`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim() }),
+        });
+        if (!r.ok) { alert('Rename failed: ' + (await r.text())); return; }
+        location.reload();
+      };
+
+      document.getElementById('deleteBtn').onclick = async () => {
+        // Say exactly what is about to be destroyed - "delete this venue?" is a
+        // very different question from "delete 4 tables and 1,182 events?".
+        const info = await (await fetch(`/api/venues/${currentVenue}/contents`)).json();
+        const c = info.counts;
+        const lines = [
+          `Delete "${info.venue.name}" and everything it holds?`, '',
+          `  ${c.assets} table(s)/station(s)`,
+          `  ${c.video_sources} camera(s)`,
+          `  ${c.sessions} session(s)`,
+          `  ${c.events} event(s)`,
+          `  ${c.snapshots} evidence snapshot(s)`, '',
+          'This cannot be undone.',
+        ];
+        if (!confirm(lines.join('\n'))) return;
+        if (!confirm(`Really delete "${info.venue.name}"? Last chance.`)) return;
+        const r = await fetch(`/api/venues/${currentVenue}`, { method: 'DELETE' });
+        if (!r.ok) { alert('Delete failed: ' + (await r.text())); return; }
+        location.reload();
+      };
+
       if (venues.length) selectVenue(venues[0].id);
       else document.getElementById('empty').textContent =
-        'No venues yet. Create one via POST /api/venues (see /docs).';
+        'No venues yet. Run field_setup.py to draw zones and create one.';
       refreshSync();
       setInterval(() => { refreshStatus(); refreshSync(); loadSessions(); loadEvents(); loadAnalytics(); loadNotifications(); loadGames(); }, 5000);
     }

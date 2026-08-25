@@ -51,5 +51,5 @@ def test_cascade_delete_and_json_roundtrip_on_libsql(libsql_client):
     space = c.post("/api/spaces", json={"venue_id": v["id"], "name": "Area"}).json()
     assert len(c.get("/api/spaces").json()) == 1
     # FK cascade must work on libsql too
-    assert c.delete(f"/api/venues/{v['id']}").status_code == 204
+    assert c.delete(f"/api/venues/{v['id']}").status_code == 200
     assert c.get(f"/api/spaces/{space['id']}").status_code == 404
