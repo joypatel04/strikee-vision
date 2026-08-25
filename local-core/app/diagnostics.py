@@ -72,6 +72,10 @@ _KNOBS: list[tuple[str, Optional[str], Callable[[str], Any], str, str]] = [
      "Person model path. Defaults to the runtime's model (yolo11n.pt)."),
     ("STRIKEE_DB", "strikee.db", str, "storage", "SQLite database path."),
     ("STRIKEE_SNAPSHOT_DIR", "snapshots", str, "storage", "Where evidence images are written."),
+    ("STRIKEE_SNAPSHOT_QUALITY", "80", int, "storage",
+     "JPEG quality for evidence images. 80 halves the size versus OpenCV's default 95."),
+    ("STRIKEE_SNAPSHOT_KEEP_DAYS", "30", int, "storage",
+     "Delete local snapshots older than this. 0 keeps everything (disk grows forever)."),
     ("STRIKEE_DEBUG", None, str, "storage",
      "Set to 1 to write debug_<venue>.csv — one row per read per asset."),
     # cloud

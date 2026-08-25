@@ -114,6 +114,27 @@ def create_app(db_path: str | None = None) -> FastAPI:
     db_path = db_path or os.environ.get("STRIKEE_DB", "strikee.db")
     interval = float(os.environ.get("STRIKEE_TICK_SEC", "7"))
 
+    async def _run_snapshot_cleanup():
+        """Trim old snapshots on a timer.
+
+        Nothing called cleanup() before, so a venue box filled its own disk
+        forever - three images per game, every game, indefinitely. Uploaded
+        copies stay in the bucket, so this only trims the local working set.
+        """
+        keep_days = int(os.environ.get("STRIKEE_SNAPSHOT_KEEP_DAYS", "30"))
+        if keep_days <= 0:
+            return                      # 0 = keep everything, deliberately
+        from .snapshots import SnapshotStore
+        store = SnapshotStore(os.environ.get("STRIKEE_SNAPSHOT_DIR", "snapshots"))
+        while True:
+            await asyncio.sleep(6 * 60 * 60)      # four times a day
+            try:
+                await asyncio.to_thread(store.cleanup, keep_days)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
     async def _run_watchdog(app_ref):
         """Poll on a timer so a fault is recorded even when nobody is looking at
         the dashboard - which, on an unattended venue box, is most of the time."""
@@ -130,11 +151,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         watchdog_task = asyncio.create_task(_run_watchdog(app))
+        cleanup_task = asyncio.create_task(_run_snapshot_cleanup())
         backup_task = _maybe_start_backup(db_path)
         sync_task = _maybe_start_turso_sync(app.state.db)
         autostart_task = _maybe_autostart(app)
         yield
-        for t in (watchdog_task, backup_task, sync_task, autostart_task):
+        for t in (watchdog_task, cleanup_task, backup_task, sync_task, autostart_task):
             if t is not None:
                 t.cancel()
         await app.state.runtime.stop_all()

@@ -116,3 +116,65 @@ def test_upload_is_skipped_entirely_when_no_bucket(tmp_path, monkeypatch):
     s = SnapshotStore(str(tmp_path))
     s._maybe_upload(tmp_path / "nope.jpg", "k")   # must not raise
     assert s.upload_status()["enabled"] is False
+
+
+# --------------------------------------------------------- size and retention
+
+
+def test_quality_defaults_to_80_not_opencvs_95(monkeypatch):
+    monkeypatch.delenv("STRIKEE_SNAPSHOT_QUALITY", raising=False)
+    assert SnapshotStore("snapshots").quality == 80
+
+
+def test_quality_is_configurable(monkeypatch):
+    monkeypatch.setenv("STRIKEE_SNAPSHOT_QUALITY", "70")
+    assert SnapshotStore("snapshots").quality == 70
+
+
+def test_quality_is_actually_applied_to_the_written_file(tmp_path):
+    """Guards the setting being read but never passed to imwrite."""
+    import numpy as np
+    frame = np.zeros((240, 320, 3), dtype="uint8")
+    frame[:, :160] = 255                      # some content to compress
+
+    big = SnapshotStore(str(tmp_path / "hi"), quality=95)
+    small = SnapshotStore(str(tmp_path / "lo"), quality=40)
+    big.save("v", "a", "Table 1", frame)
+    small.save("v", "a", "Table 1", frame)
+
+    def total(store):
+        return sum(f.stat().st_size for f in store.base.rglob("*.jpg"))
+
+    assert total(small) < total(big)
+
+
+def test_disk_usage_counts_what_is_there(tmp_path):
+    store = SnapshotStore(str(tmp_path))
+    d = tmp_path / "v" / "2026-08-25"
+    d.mkdir(parents=True)
+    (d / "a.jpg").write_bytes(b"x" * 1000)
+    (d / "b.jpg").write_bytes(b"x" * 2000)
+    usage = store.disk_usage()
+    assert usage["files"] == 2
+    assert usage["megabytes"] == 0.0        # 3 KB rounds to 0.0 MB
+
+
+def test_disk_usage_on_an_empty_store(tmp_path):
+    assert SnapshotStore(str(tmp_path / "nothing")).disk_usage() == {
+        "files": 0, "megabytes": 0.0}
+
+
+def test_cleanup_removes_old_and_keeps_recent(tmp_path):
+    import os, time
+    store = SnapshotStore(str(tmp_path))
+    d = tmp_path / "v" / "2026-01-01"
+    d.mkdir(parents=True)
+    old, new = d / "old.jpg", d / "new.jpg"
+    old.write_bytes(b"x"); new.write_bytes(b"x")
+    ancient = time.time() - (40 * 86400)
+    os.utime(old, (ancient, ancient))
+
+    removed = store.cleanup(keep_days=30)
+
+    assert removed == 1
+    assert not old.exists() and new.exists()

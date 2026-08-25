@@ -27,8 +27,15 @@ def _safe(name: str) -> str:
 
 class SnapshotStore:
     def __init__(self, base_dir: str = "snapshots", s3_bucket: Optional[str] = None,
-                 s3_endpoint: Optional[str] = None, s3_region: Optional[str] = None):
+                 s3_endpoint: Optional[str] = None, s3_region: Optional[str] = None,
+                 quality: Optional[int] = None):
         self.base = Path(base_dir)
+        # OpenCV defaults to JPEG quality 95, which roughly doubles the file for
+        # no visible gain on an evidence image someone glances at. 80 is the
+        # difference between ~160KB and ~75KB per snapshot, and there are three
+        # per game (session start, game start, game end).
+        self.quality = int(quality if quality is not None
+                           else os.environ.get("STRIKEE_SNAPSHOT_QUALITY", "80"))
         self.s3_bucket = s3_bucket or os.environ.get("STRIKEE_S3_BUCKET")
         # Fall back to the backup settings: pointing both at the same R2 account
         # is the normal case, and two copies of one endpoint is two chances to
@@ -63,7 +70,7 @@ class SnapshotStore:
         cv2.rectangle(labelled, (0, 0), (labelled.shape[1], 34), (0, 0, 0), -1)
         cv2.putText(labelled, caption, (8, 24), cv2.FONT_HERSHEY_SIMPLEX,
                     0.7, (255, 255, 255), 2)
-        cv2.imwrite(str(path), labelled)
+        cv2.imwrite(str(path), labelled, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
 
         self._maybe_upload(path, rel)
         return rel
@@ -97,9 +104,26 @@ class SnapshotStore:
             "last_error": self.last_upload_error,
         }
 
+    def disk_usage(self) -> dict:
+        """How much local disk the snapshots are taking. Unbounded growth is the
+        failure mode here - a venue box quietly fills its own disk."""
+        count = 0
+        total = 0
+        if self.base.exists():
+            for f in self.base.rglob("*.jpg"):
+                try:
+                    total += f.stat().st_size
+                    count += 1
+                except OSError:
+                    pass
+        return {"files": count, "megabytes": round(total / 1e6, 1)}
+
     def cleanup(self, keep_days: int = 7) -> int:
         """Delete snapshot images older than keep_days. Returns count removed.
-        Run this weekly (or nightly) — e.g. from a scheduled task."""
+
+        Local images are the working copy; anything uploaded stays in the bucket,
+        so this trims disk without losing the archive.
+        """
         if not self.base.exists():
             return 0
         cutoff = datetime.now(timezone.utc).astimezone() - timedelta(days=keep_days)
