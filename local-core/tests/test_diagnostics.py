@@ -122,3 +122,36 @@ def test_dashboard_exposes_the_system_check(client):
     body = client.get("/").text
     assert 'id="diag"' in body
     assert "/api/diagnostics" in body
+
+
+# ------------------------------------------------------------ object storage
+
+
+def test_bucket_without_endpoint_warns_about_r2(clean_env, monkeypatch):
+    """The endpoint is what makes an S3 client talk to R2. Without one, boto3
+    quietly talks to Amazon instead - a bucket name that means nothing there."""
+    monkeypatch.setenv("STRIKEE_S3_BUCKET", "strikee-snaps")
+    texts = _warn_texts()
+    assert any("go to Amazon S3" in t and "r2.cloudflarestorage.com" in t for t in texts)
+
+
+def test_snapshot_bucket_accepts_the_backup_endpoint(clean_env, monkeypatch):
+    """One R2 account normally serves both, so the snapshot endpoint falls back
+    to the backup one rather than demanding a second copy of it."""
+    monkeypatch.setenv("STRIKEE_S3_BUCKET", "strikee-snaps")
+    monkeypatch.setenv("STRIKEE_BACKUP_ENDPOINT", "https://acct.r2.cloudflarestorage.com")
+    assert not any("go to Amazon S3" in t for t in _warn_texts())
+
+
+def test_turso_plus_backup_is_only_a_note(clean_env, monkeypatch):
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://x.turso.io")
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "ey.token")
+    monkeypatch.setenv("STRIKEE_BACKUP_BUCKET", "strikee")
+    monkeypatch.setenv("STRIKEE_BACKUP_ENDPOINT", "https://acct.r2.cloudflarestorage.com")
+    from app.diagnostics import config_report, warnings as warn
+    perception = {"torch": "2.0.1", "opencv": "4.9", "numpy": "1.26",
+                  "ultralytics": "8.3", "libsql": "0.1", "ready": True}
+    models = [{"role": "snooker", "path": "best.pt", "exists": True, "size_mb": 6.0}]
+    hits = [w for w in warn(config_report(), perception, models)
+            if "belt-and-braces" in w["text"]]
+    assert hits and hits[0]["level"] == "info"

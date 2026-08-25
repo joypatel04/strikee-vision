@@ -78,8 +78,18 @@ _KNOBS: list[tuple[str, Optional[str], Callable[[str], Any], str, str]] = [
     ("TURSO_DATABASE_URL", None, str, "cloud", "Turso database URL. Enables cloud sync."),
     ("TURSO_AUTH_TOKEN", None, str, "cloud", "Turso auth token (value hidden here)."),
     ("STRIKEE_TURSO_SYNC_SEC", "15", float, "cloud", "Seconds between cloud syncs."),
-    ("STRIKEE_BACKUP_BUCKET", None, str, "cloud", "S3/R2 bucket for database backups."),
-    ("STRIKEE_S3_BUCKET", None, str, "cloud", "S3/R2 bucket for snapshot upload."),
+    ("STRIKEE_BACKUP_BUCKET", None, str, "cloud",
+     "Bucket for whole-database backups. Redundant if Turso sync is on."),
+    ("STRIKEE_BACKUP_ENDPOINT", None, str, "cloud",
+     "S3 endpoint for backups. Cloudflare R2: https://<account-id>.r2.cloudflarestorage.com"),
+    ("STRIKEE_BACKUP_REGION", "auto", str, "cloud", "Bucket region. 'auto' is correct for R2."),
+    ("STRIKEE_BACKUP_EVERY_MIN", None, float, "cloud",
+     "Minutes between automatic database backups. Unset = no automatic backup."),
+    ("STRIKEE_S3_BUCKET", None, str, "cloud", "Bucket for evidence snapshot images."),
+    ("STRIKEE_S3_ENDPOINT", None, str, "cloud",
+     "S3 endpoint for snapshots. Falls back to STRIKEE_BACKUP_ENDPOINT."),
+    ("STRIKEE_S3_REGION", None, str, "cloud",
+     "Region for snapshots. Falls back to STRIKEE_BACKUP_REGION, then 'auto'."),
     ("STRIKEE_AUTOSTART_VENUE", None, str, "runtime",
      "Venue id (or 'all') to start automatically on boot."),
     ("STRIKEE_HEADLESS", None, str, "runtime", "1 = server only, no desktop window."),
@@ -248,6 +258,29 @@ def warnings(cfg: list[dict], perception: dict, models: list[dict]) -> list[dict
         if perception["libsql"] is None:
             warn("error", 'Turso is configured but the libsql client is not installed. '
                           'Run: pip install -e ".[turso]"')
+
+    # --- object storage: the endpoint is what makes R2 work ---------------
+    for bucket_knob, endpoint_knob, what in (
+        ("STRIKEE_S3_BUCKET", "STRIKEE_S3_ENDPOINT", "snapshot images"),
+        ("STRIKEE_BACKUP_BUCKET", "STRIKEE_BACKUP_ENDPOINT", "database backups"),
+    ):
+        if not _is_set(bucket_knob):
+            continue
+        if _module_version("boto3") is None:
+            warn("error", f"{bucket_knob} is set but boto3 is not installed, so {what} "
+                          'are not being uploaded. Run: pip install -e ".[cloud]"')
+        endpoint_set = _is_set(endpoint_knob)
+        if bucket_knob == "STRIKEE_S3_BUCKET" and not endpoint_set:
+            endpoint_set = _is_set("STRIKEE_BACKUP_ENDPOINT")
+        if not endpoint_set:
+            warn("warn", f"{bucket_knob} has no endpoint, so {what} go to Amazon S3. "
+                         f"For Cloudflare R2 set {endpoint_knob} to "
+                         "https://<account-id>.r2.cloudflarestorage.com")
+
+    if _is_set("TURSO_DATABASE_URL") and _is_set("STRIKEE_BACKUP_BUCKET"):
+        warn("info", "Turso sync and database backups are both on. Turso already keeps "
+                     "a cloud copy, so the backup bucket is belt-and-braces - fine, "
+                     "but not required.")
 
     if by_name["STRIKEE_DEBUG"]["source"] in ("environment", "env file"):
         warn("info", "STRIKEE_DEBUG is on — debug_<venue>.csv is being written. "
