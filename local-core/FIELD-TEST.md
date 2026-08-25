@@ -229,6 +229,82 @@ tunnel/R2 setup instead — the box must never miss a rack because the wifi
 blipped. (`strikee-doctor` with `STRIKEE_LIBSQL_LOCAL=1` isolates the native-
 client question from the network question.)
 
+## Settings that survive: the `.env` file
+
+`set STRIKEE_EXIT_SEC=120` applies **only to the window you typed it in**. A
+shortcut, a new PowerShell, or a scheduled task starts with none of it — and
+runs on defaults without saying so.
+
+Put settings in a **`.env` file** beside `strikee.db` instead. It is read every
+time the app starts, from any shell:
+
+```bash
+cp .env.example .env      # then edit it
+```
+
+A real environment variable still wins over the file, so `set VAR=x` remains a
+one-off override while you tune.
+
+**Confirm it was picked up:** dashboard -> **System check** -> the **From**
+column should read **`env file`** for everything you set. If it reads
+`default`, the file was not found — check it sits in the directory you launch
+from, or point at it with `STRIKEE_ENV_FILE`.
+
+## When something breaks, the dashboard says so
+
+This box has **two independent networks**, and either can fail alone:
+
+- the wifi adapter to the extender carries the **cameras**
+- the second adapter carries the **internet** (cloud sync)
+
+Lose the first and tracking stops while the dashboard still loads perfectly over
+the second. Lose the second and every table keeps updating while nothing reaches
+the cloud. Both look fine from the wrong angle, which is how a fault runs for a
+week unnoticed.
+
+A **banner at the top of the dashboard** names the fault, what it means, and
+which adapter to look at:
+
+| Banner | Meaning |
+|---|---|
+| **No cameras responding** | All cameras failing. Tracking has stopped, nothing is being recorded. Check the extender adapter and the DVR. |
+| **N of M cameras not responding** | Those channels are down; the rest are fine and still tracking. |
+| **Not syncing to the cloud** | Internet-side only. Games are still recorded locally and upload when it returns — nothing is lost. |
+| **No pipeline running** | Nothing is being tracked. A warning if autostart is configured, otherwise just a note. |
+
+Faults are also written to the Notifications panel (with a cooldown, so a camera
+flapping overnight leaves a readable trail rather than thousands of rows), and
+checked on a timer even when nobody has the dashboard open —
+`STRIKEE_WATCHDOG_SEC`, default 60s. Also at `GET /api/system-health`.
+
+## Start on boot, hands-off
+
+One command, from `local-core` in an **administrator** PowerShell:
+
+```
+powershell -ExecutionPolicy Bypass -File packaging\install-autostart.ps1
+```
+
+It checks the venv and model are in place, writes `STRIKEE_AUTOSTART_VENUE` into
+`.env`, registers a scheduled task, and disables sleep. Add `-Headless` for no
+desktop window, `-VenueId <id>` for a single venue, `-Uninstall` to remove it.
+
+Test without rebooting:
+
+```
+Start-ScheduledTask -TaskName StrikeeVision
+Get-ScheduledTask -TaskName StrikeeVision | Get-ScheduledTaskInfo
+```
+
+`LastTaskResult 0` means it started cleanly.
+
+**It triggers at logon, not at boot** — deliberately. The cameras are reached
+over wifi, and wifi is generally not up before a user session exists; a SYSTEM
+task at boot would start, find no cameras and sit there failing. So **enable
+Windows auto-login** for the club user (`netplwiz`), or after a power cut the
+task waits at the lock screen forever. The 45-second start delay gives the
+adapters time to associate.
+
 ## Run unattended on Windows (PC on → it just works, staff do nothing)
 
 By default the app needs someone to launch it and click **Start pipeline**. To

@@ -7,6 +7,7 @@ and the minimal dashboard shell. Run locally with:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,6 +25,8 @@ from .entities import REGISTRY
 from .pipeline.broadcast import Broadcaster
 from .pipeline.manager import PerceptionUnavailable, RuntimeManager
 from .runtime_api import build_runtime_router
+from .store import NotificationStore
+from .watchdog import Watchdog
 
 WEB_DIR = Path(__file__).parent.parent / "web"
 
@@ -111,13 +114,27 @@ def create_app(db_path: str | None = None) -> FastAPI:
     db_path = db_path or os.environ.get("STRIKEE_DB", "strikee.db")
     interval = float(os.environ.get("STRIKEE_TICK_SEC", "7"))
 
+    async def _run_watchdog(app_ref):
+        """Poll on a timer so a fault is recorded even when nobody is looking at
+        the dashboard - which, on an unattended venue box, is most of the time."""
+        period = float(os.environ.get("STRIKEE_WATCHDOG_SEC", "60"))
+        while True:
+            await asyncio.sleep(period)
+            try:
+                await asyncio.to_thread(app_ref.state.watchdog.poll)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        watchdog_task = asyncio.create_task(_run_watchdog(app))
         backup_task = _maybe_start_backup(db_path)
         sync_task = _maybe_start_turso_sync(app.state.db)
         autostart_task = _maybe_autostart(app)
         yield
-        for t in (backup_task, sync_task, autostart_task):
+        for t in (watchdog_task, backup_task, sync_task, autostart_task):
             if t is not None:
                 t.cancel()
         await app.state.runtime.stop_all()
@@ -127,6 +144,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.state.db = Database(db_path)
     app.state.broadcaster = Broadcaster()
     app.state.runtime = RuntimeManager(app.state.db, app.state.broadcaster, interval)
+    app.state.watchdog = Watchdog(app.state.db, app.state.runtime,
+                                  NotificationStore(app.state.db))
 
     @app.get("/health")
     def health():
@@ -142,6 +161,12 @@ def create_app(db_path: str | None = None) -> FastAPI:
         """Cloud-sync health — the dashboard shows 'synced Xs ago' and warns if
         tracking data stops reaching the cloud."""
         return app.state.db.sync_status()
+
+    @app.get("/api/system-health")
+    def system_health():
+        """Current system faults for the dashboard banner. The two networks can
+        fail independently, and each failure looks fine from the other side."""
+        return {"faults": app.state.watchdog.poll()}
 
     @app.get("/api/diagnostics")
     def diagnostics():

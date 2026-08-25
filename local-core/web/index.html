@@ -78,6 +78,16 @@
     .w-error { border-color: #7f1d1d; background: #1c1113; color: #fca5a5; }
     .w-warn  { border-color: #78350f; background: #1b1610; color: #fcd34d; }
     .w-info  { border-color: #232833; color: #8b93a1; }
+    #faults { margin-top: 4px; }
+    .fault { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px;
+             border-radius: 10px; margin-bottom: 8px; border: 1px solid; }
+    .fault .ft { font-weight: 600; font-size: 13.5px; }
+    .fault .fd { font-size: 12.5px; margin-top: 3px; opacity: .92; }
+    .fault .fa { font-size: 12.5px; margin-top: 5px; opacity: .78; }
+    .fault .fi { font-size: 15px; line-height: 1.2; }
+    .f-critical { border-color: #7f1d1d; background: #1c1113; color: #fca5a5; }
+    .f-warning  { border-color: #78350f; background: #1b1610; color: #fcd34d; }
+    .f-info     { border-color: #232833; background: #12161c; color: #8b93a1; }
     .diag .scroll { overflow-x: auto; }
     .ts { color: #8b93a1; font-size: 11px; }
   </style>
@@ -96,6 +106,7 @@
     <button id="deleteBtn" class="danger" title="Delete this venue and all its data">Delete</button>
   </header>
   <main>
+    <div id="faults"></div>
     <div class="statusbar" id="statusbar"></div>
     <div class="statusbar" id="analytics"></div>
     <div class="grid" id="grid"></div>
@@ -413,6 +424,25 @@
       el.innerHTML = out.join('');
     }
 
+
+    const FAULT_ICON = { critical: '✕', warning: '⚠', info: 'ℹ' };
+
+    async function loadFaults() {
+      let faults = [];
+      try {
+        faults = (await (await fetch('/api/system-health')).json()).faults || [];
+      } catch (e) { return; }
+      document.getElementById('faults').innerHTML = faults.map(f => `
+        <div class="fault f-${esc(f.severity)}">
+          <div class="fi">${FAULT_ICON[f.severity] || ''}</div>
+          <div class="grow">
+            <div class="ft">${esc(f.title)}</div>
+            <div class="fd">${esc(f.detail)}</div>
+            <div class="fa">${esc(f.action)}</div>
+          </div>
+        </div>`).join('');
+    }
+
     async function init() {
       const h = await (await fetch('/health')).json();
       document.getElementById('dot').classList.add('ok');
@@ -473,9 +503,10 @@
       else document.getElementById('empty').textContent =
         'No venues yet. Run field_setup.py to draw zones and create one.';
       refreshSync();
+      loadFaults();
       setInterval(() => {
         refreshStatus(); refreshSync(); loadSessions(); loadEvents();
-        loadAnalytics(); loadNotifications(); loadGames();
+        loadAnalytics(); loadNotifications(); loadGames(); loadFaults();
         if (document.getElementById('diag').open) loadDiagnostics();
       }, 5000);
     }

@@ -22,6 +22,9 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from . import platform_env   # module, not names: ENV_FILE_PATH is rebound
+                             # by load_env_file() after import time
+
 # name, default, parser, group, one-line description
 _KNOBS: list[tuple[str, Optional[str], Callable[[str], Any], str, str]] = [
     # capture
@@ -80,6 +83,10 @@ _KNOBS: list[tuple[str, Optional[str], Callable[[str], Any], str, str]] = [
     ("STRIKEE_AUTOSTART_VENUE", None, str, "runtime",
      "Venue id (or 'all') to start automatically on boot."),
     ("STRIKEE_HEADLESS", None, str, "runtime", "1 = server only, no desktop window."),
+    ("STRIKEE_WATCHDOG_SEC", "60", float, "runtime",
+     "Seconds between system health checks (cameras, cloud sync)."),
+    ("STRIKEE_ENV_FILE", None, str, "runtime",
+     "Path to the .env file. Defaults to ./.env, then the one beside the app."),
 ]
 
 _SECRET = ("TOKEN", "SECRET", "PASSWORD", "KEY")
@@ -100,6 +107,12 @@ def config_report() -> list[dict]:
     for name, default, parse, group, desc in _KNOBS:
         raw = os.environ.get(name)
         from_env = raw is not None
+        # A key loaded from .env lands in os.environ too, so distinguish them -
+        # "did my .env get picked up?" is the question this panel exists for.
+        if from_env:
+            source = "env file" if name in platform_env.ENV_FILE_KEYS else "environment"
+        else:
+            source = "default" if default is not None else "unset"
         effective_raw = raw if from_env else default
         effective: Any = None
         error = None
@@ -112,7 +125,7 @@ def config_report() -> list[dict]:
             "name": name,
             "group": group,
             "value": _mask(name, effective_raw),
-            "source": "environment" if from_env else ("default" if default is not None else "unset"),
+            "source": source,
             "default": default,
             "effective": None if error else effective,
             "error": error,
@@ -211,7 +224,8 @@ def warnings(cfg: list[dict], perception: dict, models: list[dict]) -> list[dict
     for sec, ticks in (("STRIKEE_EXIT_SEC", "STRIKEE_EXIT_TICKS"),
                        ("STRIKEE_ENTER_SEC", "STRIKEE_ENTER_TICKS"),
                        ("STRIKEE_STILL_SEC", "STRIKEE_STILL_TICKS")):
-        if by_name[sec]["source"] == "environment" and by_name[ticks]["source"] == "environment":
+        if by_name[sec]["source"] in ("environment", "env file") and \
+                by_name[ticks]["source"] in ("environment", "env file"):
             warn("warn", f"{sec} and {ticks} are both set — {sec} wins and {ticks} is ignored.")
 
     if not perception["ready"]:
@@ -225,14 +239,17 @@ def warnings(cfg: list[dict], perception: dict, models: list[dict]) -> list[dict
             warn("error", f"{m['role']} model missing at {m['path']} — *.pt is gitignored, "
                           "so copy it across rather than expecting a clone to have it.")
 
-    if by_name["TURSO_DATABASE_URL"]["source"] == "environment":
-        if by_name["TURSO_AUTH_TOKEN"]["source"] != "environment":
+    def _is_set(knob):
+        return by_name[knob]["source"] in ("environment", "env file")
+
+    if _is_set("TURSO_DATABASE_URL"):
+        if not _is_set("TURSO_AUTH_TOKEN"):
             warn("error", "TURSO_DATABASE_URL is set but TURSO_AUTH_TOKEN is not — sync will fail.")
         if perception["libsql"] is None:
             warn("error", 'Turso is configured but the libsql client is not installed. '
                           'Run: pip install -e ".[turso]"')
 
-    if by_name["STRIKEE_DEBUG"]["source"] == "environment":
+    if by_name["STRIKEE_DEBUG"]["source"] in ("environment", "env file"):
         warn("info", "STRIKEE_DEBUG is on — debug_<venue>.csv is being written. "
                      "Useful during a field test, worth turning off for a long run.")
 
@@ -262,6 +279,8 @@ def build(db, runtime_manager, version: str) -> dict:
 
     return {
         "version": version,
+        "env_file": {"path": platform_env.ENV_FILE_PATH,
+                     "keys": len(platform_env.ENV_FILE_KEYS)},
         "host": {
             "python": platform.python_version(),
             "platform": platform.platform(),

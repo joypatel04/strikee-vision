@@ -1,12 +1,12 @@
 <#
-  Strikee Vision — Windows venue-box bring-up.
+  Strikee Vision - Windows venue-box bring-up.
 
   Run this from the local-core directory on the club PC. It does the whole
   one-time install and then proves the stack actually works, in the order that
   fails fastest:
 
     1. Python present and a sane version
-    2. Model weights present   (they are gitignored — a clone does NOT have them)
+    2. Model weights present   (they are gitignored - a clone does NOT have them)
     3. venv + dependencies
     4. strikee-doctor: loads best.pt, runs one REAL inference, decodes one DVR
        frame. This is the check that catches an old CPU whose torch wheel won't
