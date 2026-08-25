@@ -278,6 +278,38 @@ powercfg /change monitor-timeout-ac 0
 up, the capture scheduler retries offline cameras automatically. So a rebooted
 club PC returns to tracking on its own, hands-off.
 
+## Gaming lounge (a second business unit in the SAME venue)
+
+Snooker and the gaming lounge belong in **one venue** as two **business units** —
+not two venues. The stream budget is process-wide but analytics, the games log
+and the reconciliation app are all per venue, so splitting them means joining
+the club back together by hand. Business Unit is already the analytics
+dimension.
+
+Draw stations exactly like tables, changing three flags:
+
+```bash
+python field_setup.py --source "rtsp://USER:PASS@DVR_IP:554/cam/realmonitor?channel=9&subtype=0" \
+    --venue "Strikee Club" \
+    --business-unit "Gaming Lounge" --asset-type "Gaming Station" \
+    --mode occupancy --source-name "Gaming Camera A"
+```
+
+Keep `--venue` **identical** to the snooker runs — that is what puts them in the
+same venue. You should see `reusing existing venue 'Strikee Club'`.
+
+- **Draw around where a person is, feet included.** People are placed by the
+  bottom of their detection box, so a zone hugging a seat or a screen misses a
+  player whose feet fall outside it.
+- **Check the model actually sees people at that angle first.** The overhead
+  table cameras defeated person detection entirely; there is no point drawing
+  six zones until one works. Run the pipeline with a single station drawn and
+  watch it before doing the rest.
+- Stations get **occupancy sessions** but **no game counting** — correct, there
+  are no racks. `best.pt` is never loaded for them; they use `yolo11n.pt`.
+- Stations are sampled every 5s (`STRIKEE_RATE_GAMING`) against a table's 13s,
+  which is why the grace window belongs in `STRIKEE_EXIT_SEC`, not ticks.
+
 ## Footfall (Channel 7 — club entrance)
 
 Footfall is counted by **directional line-crossing**: people are tracked
@@ -355,7 +387,7 @@ ffmpeg -i "rtsp://USER:PASS@CAM_IP:554/stream1" -c copy -t 7200 test_recording.m
 | Balls not detected / table shows Available during a game | **stream quality** | use the **main/high-res** RTSP stream, not a sub-stream |
 | Misses some balls | sensor confidence | lower it: `PATCH /api/sensors/{id}` `{"conf_threshold": 0.15}` via `/docs` |
 | Needs fewer balls to count as a game | sensor `params.min_balls` | set `{"params": {"min_balls": 2}}` |
-| Table goes Available during a long player pause | `STRIKEE_EXIT_TICKS` | raise it — this is the **no-play window** before a table frees up (e.g. 8–20 ≈ 1–2 min at a 7s tick) |
+| Table goes Available during a long player pause | **`STRIKEE_EXIT_SEC`** | the no-play window in **seconds** before an asset frees up (e.g. `120`). Prefer this over `STRIKEE_EXIT_TICKS`: tables are grabbed every ~13s and gaming stations every ~5s, so one tick count means 39s on a table and 15s on a station. Seconds are converted per asset from its own rate. `STRIKEE_ENTER_SEC` / `STRIKEE_STILL_SEC` work the same way. |
 | Table stays "in use" too long after players leave | `STRIKEE_EXIT_TICKS` | lower it |
 | Games over/under-counted | `STRIKEE_RACK_REDS` | reds needed to treat as a new rack (default 10; raise to be stricter) |
 | Re-rack (Check A) missed / false | `STRIKEE_RERACK_JUMP` | how big a red-count jump = a re-rack (default 6; raise to be stricter) |

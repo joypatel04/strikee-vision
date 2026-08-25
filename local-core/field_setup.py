@@ -9,6 +9,11 @@ Needs the perception extra (OpenCV):  pip install -e ".[perception]"
 
 Examples:
     python field_setup.py --source "rtsp://user:pass@CAM_IP:554/stream1" --venue "Strikee Club"
+
+    # a second business unit in the SAME venue (snooker + gaming side by side):
+    python field_setup.py --source "rtsp://...channel=9..." --venue "Strikee Club" \
+        --business-unit "Gaming Lounge" --asset-type "Gaming Station" \
+        --mode occupancy --source-name "Gaming Camera A"
     python field_setup.py --source clip.mp4 --venue "Test"     # dry run on a file
     python field_setup.py --source 0 --venue "Webcam test"     # webcam
 
@@ -234,6 +239,13 @@ def main():
     if args.mode == "snooker_game":
         print("Mode: snooker_game — draw the zone around the TABLE surface "
               "(where the balls are).")
+    else:
+        # People are located by their FEET (the bottom edge of the detection
+        # box), so a zone drawn tightly around a seat or a screen misses a
+        # player whose feet fall outside it.
+        print("Mode: occupancy — draw the zone around where a PERSON is, "
+              "including the floor at their feet (people are placed by their "
+              "feet, not their head).")
 
     try:
         max_w, max_h = (int(v) for v in args.max_window.lower().split("x"))

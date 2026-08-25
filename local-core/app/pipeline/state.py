@@ -50,12 +50,20 @@ class _AssetState:
 class StateEngine:
     def __init__(self, enter_ticks: int = 2, exit_ticks: int = 3,
                  support_high_conf: float = 0.6, activity_still_ticks: int = 3,
-                 clock=_now):
+                 clock=_now, enter_sec: float | None = None,
+                 exit_sec: float | None = None, still_sec: float | None = None,
+                 interval_for=None):
         self.enter_ticks = enter_ticks
         self.exit_ticks = exit_ticks
         self.support_high_conf = support_high_conf
         self.activity_still_ticks = activity_still_ticks
         self._clock = clock
+        # Grace windows in SECONDS, converted per asset. Optional: leave unset
+        # and the fixed tick counts above are used exactly as before.
+        self.enter_sec = enter_sec
+        self.exit_sec = exit_sec
+        self.still_sec = still_sec
+        self.interval_for = interval_for   # callable(asset) -> seconds | None
         self._states: dict[str, _AssetState] = {}
 
     def snapshot(self, asset: AssetRuntime) -> AssetSnapshot:
@@ -77,6 +85,7 @@ class StateEngine:
         """Feed one tick of observations for an asset. Returns (snapshot, changed)."""
         st = self._states.setdefault(asset.id, _AssetState())
         prev_label = st.label
+        enter_ticks, exit_ticks, still_ticks = self._thresholds(asset)
 
         occ_sensors = [s for s in asset.sensors
                        if s.kind in ("occupancy", "presence", "snooker_game")]
@@ -92,7 +101,7 @@ class StateEngine:
             st.confidence = 0.0
         else:
             raw_present, conf = self._fuse_presence(occ_sensors, raw_by_sensor, source_ok)
-            self._smooth_presence(st, raw_present)
+            self._smooth_presence(st, raw_present, enter_ticks, exit_ticks)
             st.confidence = conf
 
         # --- activity facet: movement-based (D-T4) ---
@@ -101,7 +110,7 @@ class StateEngine:
                 raw_by_sensor.get(s.id, _NO_OBS).active
                 for s in occ_sensors if source_ok.get(s.source_id, False)
             )
-            self._smooth_activity(st, raw_active)
+            self._smooth_activity(st, raw_active, still_ticks)
         else:
             st.activity = ACTIVITY_UNKNOWN
             st.activity_still = 0
@@ -113,6 +122,34 @@ class StateEngine:
         return self.snapshot(asset), changed
 
     # -- internals ---------------------------------------------------------
+
+    def _thresholds(self, asset: AssetRuntime) -> tuple[int, int, int]:
+        """Streak lengths for this asset, as (enter, exit, still).
+
+        A tick count is not a duration. Tables are grabbed every ~13s and
+        gaming stations every ~5s, so exit_ticks=3 frees a table after 39s but
+        a station after 15s - the same setting meaning very different things,
+        which is exactly how one evening of play fragments into several
+        sessions. When a window is given in seconds we convert it using the
+        asset's own sampling interval, so "free it after two minutes" means
+        two minutes everywhere.
+        """
+        enter, leave, still = (self.enter_ticks, self.exit_ticks,
+                               self.activity_still_ticks)
+        interval = None
+        if self.interval_for is not None:
+            try:
+                interval = self.interval_for(asset)
+            except Exception:
+                interval = None      # never let tuning break state derivation
+        if interval and interval > 0:
+            if self.enter_sec:
+                enter = max(1, round(self.enter_sec / interval))
+            if self.exit_sec:
+                leave = max(1, round(self.exit_sec / interval))
+            if self.still_sec:
+                still = max(1, round(self.still_sec / interval))
+        return enter, leave, still
 
     def _derive_health(self, occ_sensors, source_ok) -> str:
         source_ids = {s.source_id for s in occ_sensors if s.source_id}
@@ -163,7 +200,8 @@ class StateEngine:
         )
         return present, conf
 
-    def _smooth_presence(self, st: _AssetState, raw_present: bool) -> None:
+    def _smooth_presence(self, st: _AssetState, raw_present: bool,
+                         enter_ticks: int, exit_ticks: int) -> None:
         if raw_present:
             st.present_streak += 1
             st.absent_streak = 0
@@ -171,15 +209,16 @@ class StateEngine:
             st.absent_streak += 1
             st.present_streak = 0
 
-        if st.presence != PRESENCE_PRESENT and st.present_streak >= self.enter_ticks:
+        if st.presence != PRESENCE_PRESENT and st.present_streak >= enter_ticks:
             st.presence = PRESENCE_PRESENT
-        elif st.presence != PRESENCE_ABSENT and st.absent_streak >= self.exit_ticks:
+        elif st.presence != PRESENCE_ABSENT and st.absent_streak >= exit_ticks:
             st.presence = PRESENCE_ABSENT
         elif st.presence == PRESENCE_UNKNOWN:
             # before either threshold is met, remain unknown
             pass
 
-    def _smooth_activity(self, st: _AssetState, raw_active: bool) -> None:
+    def _smooth_activity(self, st: _AssetState, raw_active: bool,
+                         still_ticks: int) -> None:
         """Movement -> active immediately; stillness -> inactive only after
         activity_still_ticks consecutive still reads (avoids flicker between
         shots). Before that threshold, activity stays as-is (unknown right
@@ -189,7 +228,7 @@ class StateEngine:
             st.activity_still = 0
         else:
             st.activity_still += 1
-            if st.activity_still >= self.activity_still_ticks:
+            if st.activity_still >= still_ticks:
                 st.activity = ACTIVITY_INACTIVE
 
     def _derive_label(self, st: _AssetState) -> str:

@@ -91,10 +91,21 @@ class RuntimeManager:
         sampler = MetricStore(self._db)
 
         # Field-test tunables via env (no code edit needed at the venue).
+        # Prefer the *_SEC windows: they mean the same thing on a table grabbed
+        # every 13s and a gaming station grabbed every 5s, where a shared tick
+        # count does not. Ticks remain the default so behaviour is unchanged
+        # unless a window is set explicitly.
+        def _sec(name):
+            raw = os.environ.get(name)
+            return float(raw) if raw else None
+
         engine = StateEngine(
             enter_ticks=int(os.environ.get("STRIKEE_ENTER_TICKS", "2")),
             exit_ticks=int(os.environ.get("STRIKEE_EXIT_TICKS", "3")),
             activity_still_ticks=int(os.environ.get("STRIKEE_STILL_TICKS", "3")),
+            enter_sec=_sec("STRIKEE_ENTER_SEC"),
+            exit_sec=_sec("STRIKEE_EXIT_SEC"),
+            still_sec=_sec("STRIKEE_STILL_SEC"),
         )
         motion = float(os.environ.get("STRIKEE_MOTION_THRESHOLD", "8.0"))
         person_model = os.environ.get("STRIKEE_PERSON_MODEL", self._model)
@@ -173,6 +184,16 @@ class RuntimeManager:
             return
         uris = {s.id: s.uri for s in rt.sources if s.uri and s.id in intervals}
         src_by_id = {s.id: s for s in rt.sources}
+
+        # Tell the state engine how often each asset is actually sampled, so a
+        # grace window given in seconds converts correctly per asset. An asset
+        # watched by several cameras takes the fastest of them.
+        def _interval_for(asset):
+            ivs = [intervals[s.source_id] for s in asset.sensors
+                   if s.source_id in intervals]
+            return min(ivs) if ivs else None
+
+        rt.engine.interval_for = _interval_for
         loop = asyncio.get_running_loop()
 
         def on_frame(sid, ok, frame):
@@ -193,6 +214,10 @@ class RuntimeManager:
 
     def run_runtime(self, venue_id: str, runtime: LiveRuntime) -> None:
         """Register a runtime and spawn its tick loop (used by start() and tests)."""
+        if getattr(runtime, "engine", None) is not None and \
+                getattr(runtime.engine, "interval_for", None) is None:
+            # legacy loop: one tick interval for every asset
+            runtime.engine.interval_for = lambda asset: self._interval
         self._runtimes[venue_id] = runtime
         self._tasks[venue_id] = asyncio.create_task(self._loop(venue_id))
 
