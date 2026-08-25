@@ -1,163 +1,269 @@
-# Pre-flight — Windows venue box
+# Setting up the venue box from scratch
 
-One page for the club floor. The long explanations live in `FIELD-TEST.md`;
-this is only what to do, in order, and how to tell it worked.
+Follow this in order. Each step ends with a check — if the check fails, stop
+there. Almost every hour lost so far was spent building on top of a step that
+had quietly not worked.
 
----
-
-## A. Pack before you leave (do this at home)
-
-`*.pt` and `*.db` are **gitignored** — a `git clone` on the club PC arrives with
-**no model at all**. Nothing works without these on a USB stick:
-
-| File | Size | Why |
-|---|---|---|
-| `local-core/best.pt` | 6 MB | **The product.** Custom snooker model, 9 classes (reds, colours, `game_start`, player). Without it there is no detection. |
-| `local-core/yolo11n.pt` | 5 MB | Person detection (footfall / occupancy). |
-| `local-core/strikee.db` | 200 KB | *Optional.* Carries the venue + zones so you don't re-draw them on site. |
-| the repo itself | — | Zip it, or `git clone` on the box and copy the two `.pt` files in afterwards. |
-
-Also worth having: the Python 3.12 installer downloaded (club wifi may be slow),
-and your Turso URL + token written down.
+The one rule behind the ordering: **whatever creates `strikee.db` first decides
+what kind of database it is.** Configure the cloud before drawing zones, or the
+replica cannot adopt the file and you start again.
 
 ---
 
-## B. Network — the dual-homed PC
+## 0. Before you begin
 
-The PC has **two** networks: Wi-Fi to the extender for the **cameras**, Ethernet
-from the Airtel router for the **internet**. Both will try to be the default
-route. Fix it or the internet silently dies.
-
-- [ ] **Wi-Fi adapter → static IP, gateway BLANK**
-      `192.168.0.50` / `255.255.255.0` / gateway *(empty)* / DNS *(empty)*
-      Pick an address outside the club router's DHCP pool. Windows will label it
-      "No internet" — that is correct.
-- [ ] **Ethernet adapter → DHCP as normal** (Airtel router, carries internet).
-- [ ] `route print` → exactly **one** `0.0.0.0` default route, via the Airtel gateway.
-- [ ] `ping 192.168.0.108` succeeds.
-- [ ] `netsh wlan show interfaces` → note **Signal %**. Above ~70% good;
-      below ~50% set `STRIKEE_MAX_STREAMS=2` and raise `STRIKEE_RATE_TABLE`.
-- [ ] **Wi-Fi power saving OFF** — Device Manager → Wi-Fi adapter → Power
-      Management → uncheck *"Allow the computer to turn off this device"*.
-      Otherwise cameras go grey overnight.
-- [ ] **DHCP reservation for the DVR** on the club router, so `192.168.0.108`
-      never moves. Every RTSP URL hardcodes it; a new lease looks like a code bug.
-
----
-
-## C. Install — one command
-
-From `local-core\`:
-
-Set the stream URL once (the quotes around the whole assignment matter — the
-URL contains `&`, which cmd would otherwise treat as a command separator):
-
-```bat
-set "RTSP=rtsp://USER:PASS@192.168.0.108:554/cam/realmonitor?channel=1&subtype=0"
-packaging\windows-setup.bat "%RTSP%"
-```
-
-> **Credentials are not in this repo — it is public.** Substitute the real DVR
-> user and password from your own notes. If the password contains `@`, URL-encode
-> it as `%40`. Never commit the filled-in URL.
-
-Checks Python, checks the models are present, builds the venv, installs
-everything, then runs `strikee-doctor`.
-
-### The go/no-go gate
-
-`strikee-doctor` loads `best.pt`, runs **one real inference**, and decodes one
-DVR frame. **All green = the box is fine.** This is the single check that matters —
-an old CPU whose torch wheel refuses to run fails here, in minute five, not at
-11pm. If it fails, send Claude that output verbatim; the fallback is an ONNX
-Runtime path.
-
-Reference: `best.pt` is 3.0M params (YOLOv8-nano class) and needs ~1.7
-inferences/sec total across all cameras. That is a **light** load — the pipeline
-grabs every 3–13s, and each grab spends ~1.7s on RTSP connection anyway.
-
----
-
-## D. Configure and run
-
-- [ ] Zones — one polygon per table, run once per channel:
-      ```bat
-      .venv\Scripts\python.exe field_setup.py --source "%RTSP%" --venue "Strikee Club"
-      ```
-      Click the **table surface** (the green), not where people stand.
-      **Channel 1** → 1 table · **channel 4** → 1 table · **channel 6** → **TWO
-      polygons** (table 3 snooker + table 4). Skip channels 2, 3, 5 — wrong
-      angle, the model was never trained on it.
-- [ ] Run with the debug log on:
-      ```bat
-      set STRIKEE_DEBUG=1
-      .venv\Scripts\strikee-core.exe
-      ```
-- [ ] Dashboard at `http://127.0.0.1:8760/`, pick the venue, **Start pipeline**.
-- [ ] **Write down the real games on ONE table by hand.** ch4 was the cleanest
-      camera in the July test — use it as the reference. Without this tally you
-      cannot judge the games log, and you can't rewind a live stream.
-
----
-
-## E. Turso (only if syncing to cloud tonight)
-
-```bat
-set TURSO_DATABASE_URL=libsql://<db>.turso.io
-set TURSO_AUTH_TOKEN=<token>
-set STRIKEE_TURSO_SYNC_SEC=15
-```
-
-- [ ] Header badge shows **`☁ synced Ns ago`** (green), not `⚠ NOT syncing`.
-- [ ] **Offline write test** — pull the Ethernet, confirm a game still records,
-      plug back in, confirm it appears in Turso. If writes fail offline, stay on
-      local SQLite. The box must never miss a rack because the wifi blipped.
-
----
-
-## F. Judging it (the actual point of the evening)
-
-Compare against your handwritten tally:
-
-- Games log count + times roughly match reality?
-- Open each game's **snapshot** — was it a real rack, a real end?
-- Count **false Occupied** (empty table shown busy) and **false Available**
-  (busy table shown free).
-
-Tuning is all env vars — change, restart, re-observe. No code edits:
-
-| Symptom | Knob |
+| You need | Notes |
 |---|---|
-| Games missed, `red` peaks low on a fresh rack | lower `STRIKEE_RACK_REDS` / `STRIKEE_RERACK_HIGH` |
-| Extra games, `red` swings a lot | raise `STRIKEE_RERACK_JUMP` |
-| Table frees up during a long pause | raise `STRIKEE_EXIT_TICKS` |
-| Table stays busy after players leave | lower `STRIKEE_EXIT_TICKS` |
-| Balls missed | lower sensor `conf_threshold` to 0.15 |
-| Streams dropping | lower `STRIKEE_MAX_STREAMS` (3 → 2) |
+| `best.pt` | **6 MB, irreplaceable.** `*.pt` is gitignored, so a clone never has it. SHA256 `d5b77ec7f3c9ce3a5f7b89b405b59b4f7e6737802fb348eab45964ed8b4a1de6` |
+| `yolo11n.pt` | Optional — Ultralytics downloads it on first use. |
+| Turso URL + token | From the database's **Connect** panel. A *database* token, not a platform API token. |
+| AWS S3 bucket + IAM key | `s3:PutObject` only. Region e.g. `ap-south-1`. |
+| DVR RTSP URL | `rtsp://USER:PASS@192.168.0.108:554/cam/realmonitor?channel=N&subtype=0` — URL-encode `@` in the password as `%40`. |
 
-`debug_<venue>.csv` has one row per tick per table — what the model saw vs what
-the tracker decided. That file explains *why*, which is the knob to turn.
+If you are starting over on a box that has been used, clear it first:
 
----
+```powershell
+.venv\Scripts\python.exe tools\fresh_start.py          # shows what it would remove
+.venv\Scripts\python.exe tools\fresh_start.py --yes    # removes it
+```
 
-## G. Only after it works
-
-Autostart is a *leave-it-running* concern, not a *does-it-work* concern. Don't
-touch it until section F looks good. Then: `STRIKEE_AUTOSTART_VENUE`,
-`STRIKEE_HEADLESS=1`, Task Scheduler ONSTART, and
-`powercfg /change standby-timeout-ac 0`. Full detail in `FIELD-TEST.md`.
+Stop `strikee-core` first or Windows holds the files open.
 
 ---
 
-## Do NOT do these tomorrow
+## 1. Network — two adapters, two jobs
 
-- **Don't downscale the stream to 640×480 or 320×320.** Generic advice for
-  person detection; wrong here. Snooker balls are tiny — the 352×288 sub-stream
-  already proved it destroys detection. Stay on the **main** stream; Ultralytics
-  letterboxes to 640 internally already.
-- **Don't install OpenVINO.** Your bottleneck is RTSP connection time, not
-  inference, and this CPU predates the AVX2/VNNI instructions its speedup relies
-  on. Revisit it only for footfall, which needs continuous frames.
-- **Don't try footfall.** `FootfallRunner` is built and unit-tested but not yet
-  wired into the app, and `field_setup.py` can't draw a counting line yet.
-  Tables only tonight.
+| Adapter | Connects to | Configuration |
+|---|---|---|
+| `Wi-Fi` | the extender | Static `192.168.0.50 / 255.255.255.0`, **gateway blank**, DNS blank |
+| `Wi-Fi 2` | Airtel | DHCP, normal |
+
+The blank gateway is what stops the camera adapter competing to be the route to
+the internet. Windows will label it "No internet" — correct, ignore it.
+
+Also set once, on the camera adapter: **Device Manager → Power Management →
+uncheck "Allow the computer to turn off this device"**, or cameras go grey
+overnight.
+
+**Check:**
+
+```powershell
+ping 192.168.0.108
+ping 8.8.8.8
+Get-NetRoute -DestinationPrefix "0.0.0.0/0" | Format-Table InterfaceAlias, NextHop
+```
+
+Both pings replying, and **exactly one** default route via `Wi-Fi 2`.
+
+---
+
+## 2. Python and the stack
+
+**Python 3.11 — not 3.12.** This box is a 2011 Sandy Bridge CPU with no AVX2,
+and modern PyTorch aborts on it during import with a native crash and no Python
+traceback. The oldest torch with 3.12 wheels still fails, so 3.11 is not
+optional.
+
+```powershell
+winget install Python.Python.3.11
+```
+
+Then, from `local-core`:
+
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\python.exe -m pip install --upgrade pip
+.venv\Scripts\python.exe -m pip install -e ".[perception,desktop]"
+.venv\Scripts\python.exe -m pip install --force-reinstall "torch==2.0.1" "torchvision==0.15.2" --index-url https://download.pytorch.org/whl/cpu
+.venv\Scripts\python.exe -m pip install "numpy<2"
+.venv\Scripts\python.exe -m pip install boto3 libsql
+```
+
+The pins come last deliberately — the extras pull modern versions of both, and
+torch 2.0.1 predates NumPy 2's C API.
+
+**Always use `.venv\Scripts\python.exe -m pip`, never bare `pip`.** Bare `pip`
+resolves to system Python 3.12 and installs somewhere the app never looks.
+
+**Check:**
+
+```powershell
+.venv\Scripts\python.exe --version
+.venv\Scripts\python.exe -c "import torch, numpy, cv2, boto3, libsql; print('OK', torch.__version__, numpy.__version__)"
+```
+
+`Python 3.11.x`, then `OK 2.0.1 1.26.x`. If `import torch` crashes without a
+traceback, the venv is not 3.11.
+
+*(If the Visual C++ runtime is missing: `winget install Microsoft.VCRedist.2015+.x64`, then reboot.)*
+
+---
+
+## 3. Models
+
+Copy `best.pt` (and `yolo11n.pt` if you have it) into `local-core\`, beside
+`pyproject.toml`.
+
+**Check:**
+
+```powershell
+certutil -hashfile best.pt SHA256
+```
+
+Must match the hash in step 0. A truncated download fails later as a confusing
+model-loading error rather than an obvious one.
+
+---
+
+## 4. `.env` — before anything creates the database
+
+```powershell
+copy .env.example .env
+notepad .env
+```
+
+```ini
+STRIKEE_MAX_STREAMS=2
+STRIKEE_EXIT_SEC=120
+STRIKEE_DEBUG=1
+
+TURSO_DATABASE_URL=libsql://your-db-org.turso.io
+TURSO_AUTH_TOKEN=ey...
+STRIKEE_TURSO_SYNC_SEC=15
+
+STRIKEE_S3_BUCKET=strikee-snapshots
+AWS_DEFAULT_REGION=ap-south-1
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+`set VAR=x` applies only to the window you type it in. The `.env` file is read
+every time the app starts, from any shell, shortcut or scheduled task — which is
+the only thing that works for an unattended box.
+
+**Check Turso before trusting it:**
+
+```powershell
+.venv\Scripts\python.exe tools\turso_check.py libsql://your-db-org.turso.io <token>
+```
+
+`HTTP 200` plus a sync endpoint that answers. A 404 means no database at that
+hostname (`nslookup` proves nothing — `*.turso.io` is wildcard DNS). A 401 means
+the token belongs to a different database.
+
+---
+
+## 5. The gate — prove the configuration is live
+
+```powershell
+.venv\Scripts\strikee-doctor.exe --model best.pt --rtsp "rtsp://USER:PASS@192.168.0.108:554/cam/realmonitor?channel=1&subtype=0"
+```
+
+**Read the model line specifically.** It must say OK, not FAIL — a run that
+finishes is not a run that passed.
+
+Then:
+
+```powershell
+.venv\Scripts\strikee-core.exe
+```
+
+Open `http://127.0.0.1:8760/` → **System check**:
+
+- Every setting from `.env` reads **`env file`**, not `default`
+- **No red warnings** — it catches a missing region, absent credentials, missing
+  boto3, Turso without libsql, a too-high stream cap
+- `torch 2.0.1`, `numpy 1.26.x`, both models present
+- Database row shows the cloud backend
+
+**Stop here if any of that is wrong.** Everything after this builds on it.
+
+Then stop the app.
+
+---
+
+## 6. Zones
+
+Once per channel, **same `--venue` every time** — that is what keeps them in one
+venue:
+
+```powershell
+.venv\Scripts\python.exe field_setup.py --source "rtsp://USER:PASS@192.168.0.108:554/cam/realmonitor?channel=1&subtype=0" --venue "Strikee Club" --source-name "Channel 1"
+```
+
+Then `channel=4`, then `channel=6`.
+
+**Drawing:** click the corners of the table surface — the green felt, not where
+people stand → click the image window → press **`n`** → **switch to PowerShell
+and type the name**, press Enter (the window freezes until you do; that is the
+prompt waiting) → repeat → press **`s`** when every polygon is green and no
+yellow dots remain. **`q` discards everything.**
+
+- **Channel 6 gets TWO polygons** — table 3 and table 4.
+- Skip channels 2, 3 and 5 — wrong angle, the model was never trained on it.
+- Runs 2 and 3 must print `reusing existing venue 'Strikee Club'`.
+
+For the gaming lounge later, same command with `--business-unit "Gaming Lounge"
+--asset-type "Gaming Station" --mode occupancy`, and the same `--venue`.
+
+---
+
+## 7. Run it
+
+```powershell
+.venv\Scripts\strikee-core.exe
+```
+
+Dashboard → pick **Strikee Club** → **Start pipeline**.
+
+Within ~30 seconds you should see four tables, states changing, events arriving,
+and **no banner** at the top. A banner names the fault and which adapter to look
+at.
+
+**Then the part no tooling can do for you: write down the real games on one table
+by hand.** Channel 4 was the cleanest camera in the July test. Without that tally
+there is nothing to judge the games log against, and you cannot rewind a live
+stream.
+
+Leave it running through normal trade. Afterwards compare:
+
+- Games count and times against your notes
+- Each game's snapshot — was it a real rack, a real end?
+- Count false Occupied (empty table shown busy) and false Available
+
+`debug_<venue>.csv` has one row per read per table showing what the model saw and
+what the tracker decided. That is what explains a miscount, and what we tune
+from.
+
+---
+
+## 8. Unattended — only once step 7 looks right
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\install-autostart.ps1
+```
+
+Registers a scheduled task, writes `STRIKEE_AUTOSTART_VENUE` into `.env`, and
+disables sleep. Add `-Headless` for no window.
+
+**Then enable Windows auto-login** (`netplwiz`). The task triggers at logon, not
+boot — deliberately, because the cameras are on wifi and wifi is not up before a
+user session exists. Without auto-login, a power cut leaves it at the lock screen
+forever.
+
+**Check:** pull the power, plug it back in, walk away for five minutes, then open
+the dashboard from your phone. Tracking should have resumed on its own.
+
+---
+
+## Things that have already cost an evening
+
+- **Bare `pip`** installs into system Python 3.12, not the venv.
+- **Python 3.12** cannot run torch on this CPU, and downgrading torch does not
+  help — 3.11 is required.
+- **`set VAR=x`** dies with the window. Use `.env`.
+- **LAN 1 on the Airtel router** serves no DHCP. Do not plug the PC in there.
+- **`nslookup` on a Turso host** always succeeds. It proves nothing.
+- **Drawing zones before configuring Turso** makes a database the replica cannot
+  adopt. There is no repair.
+- **The zone editor's `n` key** prompts in the terminal, not the image window.
