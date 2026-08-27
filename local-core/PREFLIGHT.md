@@ -4,9 +4,12 @@ Follow this in order. Each step ends with a check — if the check fails, stop
 there. Almost every hour lost so far was spent building on top of a step that
 had quietly not worked.
 
-The one rule behind the ordering: **whatever creates `strikee.db` first decides
-what kind of database it is.** Configure the cloud before drawing zones, or the
-replica cannot adopt the file and you start again.
+**On ordering:** in `replica` mode, whatever creates `strikee.db` first decides
+what kind of database it is, so the cloud has to be configured before zones or
+the replica cannot adopt the file. **In `push` mode that does not apply** —
+local stays ordinary SQLite either way — so steps 4 to 6 can be done in any
+order. Steps 1 to 3 are still prerequisites for everything, and zones still come
+last.
 
 ---
 
@@ -188,6 +191,10 @@ Then stop the app.
 ---
 
 ## 6. Survey the cameras before drawing anything
+
+*(Independent of steps 4 and 5 — it needs only the venv, the models and the DVR,
+and can be run first. It loads both models and pulls a real frame from every
+channel, so passing it also covers what the doctor checks.)*
 
 Twelve channels, and only some are useful. More importantly, **a camera angle
 can defeat the model while looking perfectly fine to you** - the overhead table
