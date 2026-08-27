@@ -82,6 +82,12 @@ _KNOBS: list[tuple[str, Optional[str], Callable[[str], Any], str, str]] = [
     ("TURSO_DATABASE_URL", None, str, "cloud", "Turso database URL. Enables cloud sync."),
     ("TURSO_AUTH_TOKEN", None, str, "cloud", "Turso auth token (value hidden here)."),
     ("STRIKEE_TURSO_SYNC_SEC", "15", float, "cloud", "Seconds between cloud syncs."),
+    ("STRIKEE_SYNC_MODE", "replica", str, "cloud",
+     "replica = libsql embedded replica. push = local SQLite plus HTTP push (use when "
+     "the database has no replication endpoints). off = local only."),
+    ("STRIKEE_SYNC_BATCH", "200", int, "cloud", "Rows per push request."),
+    ("STRIKEE_SYNC_METRICS", None, str, "cloud",
+     "Set to 1 to also push metric_samples (~2.4M rows/month). Off by default."),
     ("STRIKEE_BACKUP_BUCKET", None, str, "cloud",
      "Bucket for whole-database backups. Redundant if Turso sync is on."),
     ("STRIKEE_BACKUP_ENDPOINT", None, str, "cloud",

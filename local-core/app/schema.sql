@@ -228,3 +228,15 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_notifs_venue_status ON notifications(venue_id, status);
 CREATE INDEX IF NOT EXISTS idx_notifs_rule_asset   ON notifications(rule_id, asset_id, created_at);
+
+-- ── Cloud push sync (local SQLite stays the source of truth) ───────────
+-- One keyset cursor per table: (timestamp, id) of the last row confirmed
+-- pushed. The id is not decoration - a batch can fill entirely with rows
+-- sharing one timestamp, and a bare "newer than T" cursor would then never
+-- advance past it.
+CREATE TABLE IF NOT EXISTS sync_state (
+    table_name   TEXT PRIMARY KEY,
+    cursor       TEXT,                  -- JSON {"ts": ..., "id": ...}
+    rows_pushed  INTEGER NOT NULL DEFAULT 0,
+    updated_at   TEXT NOT NULL
+);

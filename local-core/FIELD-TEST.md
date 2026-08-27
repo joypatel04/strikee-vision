@@ -241,6 +241,18 @@ That clears the local database, its sidecars, snapshots and debug logs. It does
 not touch the cloud: a Turso database keeps what it has, and uploaded snapshots
 stay in their bucket.
 
+**Two ways to get data to Turso.** `STRIKEE_SYNC_MODE` picks between them:
+
+- **`push`** - local SQLite stays authoritative and rows are pushed up over the
+  HTTP API on a timer. Works against any Turso database, needs no libsql client,
+  and the box keeps recording through an outage (the next cycle resends from
+  where it stopped). Config, events, sessions and notifications go up;
+  `metric_samples` is opt-in via `STRIKEE_SYNC_METRICS=1` because it is roughly
+  2.4M rows a month.
+- **`replica`** - the libsql embedded replica, and the default. Neater when it
+  works, but it needs the `/v1` replication endpoints and many databases do not
+  serve them. The symptom is `failed to pull db export status 404`.
+
 **If sync fails, ask Turso directly.** The client's own errors are hard to read -
 a wrong hostname and a wrong token look similar from inside it:
 

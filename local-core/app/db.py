@@ -37,6 +37,14 @@ def _sqlite_connect(path: str) -> sqlite3.Connection:
 
 
 def _turso_env():
+    """Credentials for the libsql EMBEDDED REPLICA backend.
+
+    STRIKEE_SYNC_MODE=push means local SQLite stays the source of truth and
+    app/cloudsync.py pushes rows up over HTTP instead - so the same
+    TURSO_* variables must NOT also make this open a replica.
+    """
+    if os.environ.get("STRIKEE_SYNC_MODE", "").lower() in ("push", "off"):
+        return None
     url = os.environ.get("TURSO_DATABASE_URL")
     tok = os.environ.get("TURSO_AUTH_TOKEN")
     return (url, tok) if url and tok else None

@@ -35,7 +35,7 @@ def _fault(key: str, severity: str, title: str, detail: str, action: str) -> dic
             "detail": detail, "action": action}
 
 
-def check(db, runtime_manager) -> list[dict]:
+def check(db, runtime_manager, sync_status=None) -> list[dict]:
     """Current system faults, most severe first. Never raises."""
     faults: list[dict] = []
 
@@ -81,7 +81,7 @@ def check(db, runtime_manager) -> list[dict]:
 
     # --- cloud sync: the internet-facing network -------------------------
     try:
-        sync = db.sync_status()
+        sync = sync_status() if sync_status is not None else db.sync_status()
     except Exception:
         sync = None
     if sync and sync.get("sync_enabled") and not sync.get("healthy"):
@@ -124,10 +124,12 @@ class Watchdog:
     """
 
     def __init__(self, db, runtime_manager, notification_store=None,
-                 cooldown_sec: float = 900.0, clock=time.monotonic):
+                 cooldown_sec: float = 900.0, clock=time.monotonic,
+                 sync_status=None):
         self._db = db
         self._rt = runtime_manager
         self._notifications = notification_store
+        self._sync_status = sync_status   # push mode reports its own health
         self._cooldown = cooldown_sec
         self._clock = clock
         self._last_seen: dict[str, float] = {}
@@ -136,7 +138,7 @@ class Watchdog:
     def poll(self) -> list[dict]:
         """One pass. Returns the current faults and records the new ones."""
         try:
-            faults = check(self._db, self._rt)
+            faults = check(self._db, self._rt, self._sync_status)
         except Exception:
             return self.faults          # keep the last known state
         now = self._clock()

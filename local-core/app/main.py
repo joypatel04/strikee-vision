@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .admin import purge_venue, rename_venue, venue_contents
 from .api import all_routers
+from .cloudsync import from_env as cloud_sync_from_env
 from .diagnostics import build as build_diagnostics
 from .db import Database
 from .entities import REGISTRY
@@ -114,6 +115,25 @@ def create_app(db_path: str | None = None) -> FastAPI:
     db_path = db_path or os.environ.get("STRIKEE_DB", "strikee.db")
     interval = float(os.environ.get("STRIKEE_TICK_SEC", "7"))
 
+    async def _run_cloud_push(app_ref):
+        """Push local rows to Turso on a timer.
+
+        Local SQLite is authoritative, so a failed cycle costs nothing but
+        freshness - the next one resends from the same cursor.
+        """
+        pusher = app_ref.state.cloud
+        if pusher is None:
+            return
+        period = float(os.environ.get("STRIKEE_TURSO_SYNC_SEC", "15"))
+        while True:
+            try:
+                await asyncio.to_thread(pusher.push_once)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            await asyncio.sleep(period)
+
     async def _run_snapshot_cleanup():
         """Trim old snapshots on a timer.
 
@@ -151,12 +171,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         watchdog_task = asyncio.create_task(_run_watchdog(app))
+        cloud_task = asyncio.create_task(_run_cloud_push(app))
         cleanup_task = asyncio.create_task(_run_snapshot_cleanup())
         backup_task = _maybe_start_backup(db_path)
         sync_task = _maybe_start_turso_sync(app.state.db)
         autostart_task = _maybe_autostart(app)
         yield
-        for t in (watchdog_task, cleanup_task, backup_task, sync_task, autostart_task):
+        for t in (watchdog_task, cloud_task, cleanup_task, backup_task,
+                  sync_task, autostart_task):
             if t is not None:
                 t.cancel()
         await app.state.runtime.stop_all()
@@ -166,8 +188,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.state.db = Database(db_path)
     app.state.broadcaster = Broadcaster()
     app.state.runtime = RuntimeManager(app.state.db, app.state.broadcaster, interval)
+    app.state.cloud = cloud_sync_from_env(app.state.db)
     app.state.watchdog = Watchdog(app.state.db, app.state.runtime,
-                                  NotificationStore(app.state.db))
+                                  NotificationStore(app.state.db),
+                                  sync_status=(app.state.cloud.status
+                                               if app.state.cloud else None))
 
     @app.get("/health")
     def health():
@@ -181,7 +206,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/sync-health")
     def sync_health():
         """Cloud-sync health — the dashboard shows 'synced Xs ago' and warns if
-        tracking data stops reaching the cloud."""
+        tracking data stops reaching the cloud. Push mode reports its own state;
+        the replica backend reports the database's."""
+        if getattr(app.state, "cloud", None) is not None:
+            return app.state.cloud.status()
         return app.state.db.sync_status()
 
     @app.get("/api/system-health")
