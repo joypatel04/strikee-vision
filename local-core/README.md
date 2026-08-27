@@ -255,6 +255,7 @@ deletes your database backups along with old snapshots.
 | `python tools/survey_cameras.py --url "...{ch}..." --channels 1-12 [--sweep]` | Look at every channel and report what the models see. Run before drawing zones. |
 | `python tools/turso_check.py <url> <token>` | Prove a Turso database is reachable, writable, and which sync mode to use. |
 | `python tools/restore.py [--list \| --verify \| --yes]` | List, verify or restore a database backup. |
+| `python tools/rename_cameras.py [--auto]` | List cameras and what each watches; rename them from the channel in their URL. |
 | `python tools/fresh_start.py [--yes]` | Wipe local database, snapshots and debug logs for a clean setup. |
 | `strikee-backup` | Run one backup now. |
 
@@ -268,6 +269,9 @@ deletes your database backups along with old snapshots.
   --source-name "Channel 1" --aspect 16:9
 ```
 
+- **`--source-name` names the CAMERA, not the table.** Easy to get wrong when
+  one camera covers two tables. Nothing tracks by it - a camera is matched by
+  its RTSP URL - so fix it later with `tools/rename_cameras.py --auto`.
 - **The same `--venue` every time.** Runs after the first must print
   `reusing existing venue` — one that does not has just made a second venue.
 - **Controls:** click corners → click the image window → **`n`** → **type the
