@@ -182,7 +182,36 @@ Then stop the app.
 
 ---
 
-## 6. Zones
+## 6. Survey the cameras before drawing anything
+
+Twelve channels, and only some are useful. More importantly, **a camera angle
+can defeat the model while looking perfectly fine to you** - the overhead table
+cameras show people clearly and produce zero person detections, because the
+model was never trained looking down at heads. Draw six station zones against
+such a camera and you get a system that reports an empty room all evening with
+no clue why.
+
+```
+.venv\Scripts\python.exe tools\survey_cameras.py --url "rtsp://USER:PASS@192.168.0.108:554/cam/realmonitor?channel={ch}&subtype=0" --channels 1-12
+```
+
+Keep `{ch}` literal - the tool substitutes each channel. It writes an annotated
+frame per channel to `survey\` (green boxes = people with their feet marked,
+orange = balls) and prints what it found.
+
+**Then open the images.** The counts alone mislead:
+
+- A gaming camera with people in shot but `people=0` cannot drive occupancy. No
+  zone fixes that; look for a lower or wider camera covering the same stations.
+- `people=0` on an empty room means nothing. Re-run with someone standing there.
+- Balls on a channel you thought was a people camera means the numbering is
+  crossed.
+
+Known from the July survey: **channels 1, 4, 6** are the trained top-down table
+angle (ch6 sees two tables); **2, 3, 5** are the opposite end and detect badly;
+**7-8** are the passage and entrance. Confirm the gaming channels here.
+
+## 7. Zones
 
 Once per channel, **same `--venue` every time** — that is what keeps them in one
 venue:
@@ -208,7 +237,7 @@ For the gaming lounge later, same command with `--business-unit "Gaming Lounge"
 
 ---
 
-## 7. Run it
+## 8. Run it
 
 ```powershell
 .venv\Scripts\strikee-core.exe
@@ -237,7 +266,7 @@ from.
 
 ---
 
-## 8. Unattended — only once step 7 looks right
+## 9. Unattended — only once step 8 looks right
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File packaging\install-autostart.ps1
