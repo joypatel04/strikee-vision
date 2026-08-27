@@ -548,8 +548,9 @@ def main():
         except (ValueError, ZeroDivisionError):
             print(f"--aspect must look like 16:9 or 1.78, got {args.aspect!r}")
             sys.exit(2)
-    prior = existing_zones(args.db, args.venue, args.source,
-                           mode=args.mode if args.redraw else None)
+    # With --with-screen both zones are being replaced, so show both underneath.
+    prior_mode = None if (args.with_screen or not args.redraw) else args.mode
+    prior = existing_zones(args.db, args.venue, args.source, mode=prior_mode)
     if args.redraw:
         if not prior:
             print(f"Nothing to redraw: no {args.mode} zones on this camera in "
@@ -565,13 +566,25 @@ def main():
         print("No zones drawn — nothing written."); return
 
     if args.redraw:
-        updated, missing = redraw_zones(args.db, args.source, args.venue,
-                                        zones, args.mode)
-        print(f"\n  updated {updated} zone(s) in place")
+        # A paired run carries both kinds; each replaces the zone of its own
+        # sensor, so one pass fixes the seating area and the screen together.
+        groups = [(args.mode, [z for z in zones if z.get("kind") != "screen"]),
+                  ("screen", [z for z in zones if z.get("kind") == "screen"])]
+        total, missing = 0, []
+        for mode, group in groups:
+            if not group:
+                continue
+            updated, gone = redraw_zones(args.db, args.source, args.venue,
+                                         group, mode)
+            if updated:
+                print(f"  updated {updated} {mode} zone(s)")
+            total += updated
+            missing.extend(f"{n} ({mode})" for n in gone)
+        print(f"\n  {total} zone(s) replaced in place")
         if missing:
             print(f"  NOT FOUND: {', '.join(missing)}")
-            print(f"  A redraw replaces an existing {args.mode} zone on THIS "
-                  f"camera, matched by asset name. Nothing was created.")
+            print("  A redraw replaces an existing zone on THIS camera, matched "
+                  "by asset name and mode. Nothing was created.")
         print("  Restart strikee-core to pick up the new shapes.")
         return
 

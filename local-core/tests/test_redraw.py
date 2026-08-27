@@ -115,3 +115,44 @@ def test_existing_zones_reports_what_is_drawn(db_path):
 
 def test_existing_zones_on_an_unknown_camera_is_empty(db_path):
     assert existing_zones(db_path, "Strikee Club", "rtsp://nope") == []
+
+
+# ------------------------------------------- redrawing both zones in one pass
+
+
+def test_redraw_with_screen_replaces_both_zones(db_path):
+    """One pass fixes the seating area and its screen together, which is the
+    realistic case: a bad angle usually means both were drawn from a bad guess."""
+    new_seat = [[20, 120], [280, 120], [280, 430], [20, 430]]
+    new_tv = [[310, 70], [550, 70], [550, 210], [310, 210]]
+    drawn = [{"name": "RED", "polygon": new_seat, "kind": "asset"},
+             {"name": "RED", "polygon": new_tv, "kind": "screen"}]
+
+    for mode, group in [("occupancy", [z for z in drawn if z["kind"] != "screen"]),
+                        ("screen", [z for z in drawn if z["kind"] == "screen"])]:
+        updated, missing = redraw_zones(db_path, URI, "Strikee Club", group, mode)
+        assert (updated, missing) == (1, [])
+
+    _, sensors = _state(db_path)
+    assert sensors[("RED", "occupancy")] == [new_seat]
+    assert sensors[("RED", "screen")] == [new_tv]
+
+
+def test_redrawing_one_station_leaves_the_others_alone(tmp_path):
+    """Six stations on one camera: fixing RED must not disturb Orange."""
+    db_path = str(tmp_path / "m.db")
+    write_config(db_path, URI, "Strikee Club", "Gaming Camera A", "Gaming Lounge",
+                 "Gaming Station",
+                 [{"name": "RED", "polygon": SEAT, "kind": "asset"},
+                  {"name": "RED", "polygon": TV, "kind": "screen"},
+                  {"name": "Orange", "polygon": SEAT, "kind": "asset"},
+                  {"name": "Orange", "polygon": TV, "kind": "screen"}],
+                 mode="occupancy")
+
+    redraw_zones(db_path, URI, "Strikee Club",
+                 [{"name": "RED", "polygon": BETTER}], "occupancy")
+
+    _, sensors = _state(db_path)
+    assert sensors[("RED", "occupancy")] == [BETTER]
+    assert sensors[("Orange", "occupancy")] == [SEAT]
+    assert sensors[("Orange", "screen")] == [TV]
