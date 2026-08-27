@@ -1,516 +1,813 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Strikee Vision — Local Core</title>
-  <style>
-    :root { color-scheme: dark; }
-    * { box-sizing: border-box; }
-    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0;
-           background: #0f1216; color: #e6e9ef; }
-    header { padding: 14px 24px; border-bottom: 1px solid #232833;
-             display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-    header h1 { font-size: 15px; margin: 0; font-weight: 600; }
-    .dot { width: 9px; height: 9px; border-radius: 50%; background: #f0b429; }
-    .dot.ok { background: #22c55e; }
-    .spacer { flex: 1; }
-    select, button { background: #161b22; color: #e6e9ef; border: 1px solid #2b3240;
-             border-radius: 7px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
-    button:hover { border-color: #3b4658; }
-    main { padding: 22px; }
-    .muted { color: #8b93a1; font-size: 13px; }
-    .grid { display: grid; gap: 12px; margin-top: 16px;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
-    .asset { background: #161b22; border: 1px solid #232833; border-left-width: 4px;
-             border-radius: 10px; padding: 14px 16px; }
-    .asset .name { font-weight: 600; font-size: 14px; }
-    .asset .label { font-size: 13px; margin-top: 6px; }
-    .asset .meta { font-size: 11px; color: #8b93a1; margin-top: 8px; }
-    .s-available { border-left-color: #22c55e; }
-    .s-occupied  { border-left-color: #ef4444; }
-    .s-active    { border-left-color: #ef4444; }
-    .s-idle      { border-left-color: #f0b429; }
-    .s-degraded  { border-left-color: #f97316; }
-    .s-unknown   { border-left-color: #6b7280; }
-    button.danger { border-color: #a33; color: #d66; }
-    button.danger:hover { background: #a33; color: #fff; }
-    .statusbar { display: flex; align-items: center; gap: 14px; font-size: 12px;
-                 color: #8b93a1; margin-top: 4px; flex-wrap: wrap; }
-    .panels { display: grid; gap: 16px; margin-top: 24px;
-              grid-template-columns: 1fr 1fr; }
-    @media (max-width: 800px) { .panels { grid-template-columns: 1fr; } }
-    .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
-                color: #8b93a1; margin: 0 0 8px; }
-    .row { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
-           border: 1px solid #232833; border-radius: 8px; margin-bottom: 6px;
-           font-size: 13px; background: #12161c; }
-    .row .grow { flex: 1; }
-    .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px;
-             border: 1px solid #2b3240; color: #b9c0cc; }
-    .b-detected { color: #f0b429; border-color: #6b551b; }
-    .b-confirmed { color: #22c55e; border-color: #245e37; }
-    .b-corrected { color: #60a5fa; border-color: #294a73; }
-    .b-voided { color: #8b93a1; text-decoration: line-through; }
-    .mini { font-size: 11px; padding: 3px 8px; }
-    details.diag { margin-top: 24px; border: 1px solid #232833; border-radius: 10px;
-                   background: #12161c; }
-    details.diag > summary { cursor: pointer; padding: 12px 16px; font-size: 13px;
-                   text-transform: uppercase; letter-spacing: .04em; color: #8b93a1; }
-    details.diag > summary:hover { color: #e6e9ef; }
-    .diag-body { padding: 0 16px 16px; }
-    .diag h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
-               color: #8b93a1; margin: 18px 0 8px; }
-    .diag table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .diag th { text-align: left; color: #8b93a1; font-weight: 500; padding: 6px 8px;
-               border-bottom: 1px solid #232833; white-space: nowrap; }
-    .diag td { padding: 6px 8px; border-bottom: 1px solid #1a1f27;
-               vertical-align: top; }
-    .diag td.k { font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
-    .diag td.v { font-family: ui-monospace, Menlo, monospace; color: #e6e9ef;
-                 white-space: nowrap; }
-    .diag td.d { color: #8b93a1; }
-    .src-environment { color: #22c55e; border-color: #245e37; }
-    .src-default { color: #8b93a1; }
-    .src-unset { color: #4b5563; }
-    .w { padding: 9px 12px; border-radius: 8px; margin-bottom: 6px; font-size: 12.5px;
-         border: 1px solid #232833; }
-    .w-error { border-color: #7f1d1d; background: #1c1113; color: #fca5a5; }
-    .w-warn  { border-color: #78350f; background: #1b1610; color: #fcd34d; }
-    .w-info  { border-color: #232833; color: #8b93a1; }
-    #faults { margin-top: 4px; }
-    .fault { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px;
-             border-radius: 10px; margin-bottom: 8px; border: 1px solid; }
-    .fault .ft { font-weight: 600; font-size: 13.5px; }
-    .fault .fd { font-size: 12.5px; margin-top: 3px; opacity: .92; }
-    .fault .fa { font-size: 12.5px; margin-top: 5px; opacity: .78; }
-    .fault .fi { font-size: 15px; line-height: 1.2; }
-    .f-critical { border-color: #7f1d1d; background: #1c1113; color: #fca5a5; }
-    .f-warning  { border-color: #78350f; background: #1b1610; color: #fcd34d; }
-    .f-info     { border-color: #232833; background: #12161c; color: #8b93a1; }
-    .diag .scroll { overflow-x: auto; }
-    .ts { color: #8b93a1; font-size: 11px; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strikee Vision</title>
+<style>
+  /* Everything is local. This box's internet can drop while the cameras keep
+     working, and a dashboard that degrades when that happens is the wrong
+     dashboard - so no font CDN, no icon pack, no remote anything. The system
+     stack is genuinely good on Windows: Segoe UI Variable and Cascadia. */
+  :root {
+    --bg:        #080B09;
+    --surface:   #101512;
+    --surface-2: #161D19;
+    --line:      #1F2A23;
+    --line-soft: #18211C;
+
+    --ink:       #E8EFE9;
+    --ink-dim:   #93A399;
+    --ink-faint: #5E6E64;
+
+    /* Brightness carries activity; red is reserved for things that are wrong.
+       A busy table is the venue earning, not an alarm. */
+    --live:      #35D07F;
+    --idle:      #E0A33E;
+    --free:      #46564C;
+    --degraded:  #F0873A;
+    --fault:     #F2544B;
+
+    --f-ui:   "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system,
+              "Helvetica Neue", sans-serif;
+    --f-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, "SF Mono",
+              Consolas, monospace;
+
+    --r: 12px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--f-ui);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* a very faint vignette so the page has depth rather than being flat black */
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background: radial-gradient(120% 80% at 50% -10%, #10201700 0%, #0000 60%),
+                radial-gradient(90% 60% at 50% 0%, #35D07F0A 0%, #0000 55%);
+  }
+  .wrap { position: relative; z-index: 1; max-width: 1440px; margin: 0 auto;
+          padding: 0 20px 64px; }
+
+  button, select {
+    font-family: inherit; font-size: 13px; color: var(--ink);
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 12px; cursor: pointer;
+    transition: border-color .15s, background .15s, color .15s;
+  }
+  button:hover, select:hover { border-color: #33453A; background: #1A231D; }
+  button:focus-visible, select:focus-visible {
+    outline: 2px solid var(--live); outline-offset: 2px; }
+  button.primary { border-color: #24503B; background: #12291F; color: var(--live); }
+  button.primary:hover { background: #163526; }
+  button.danger:hover { border-color: var(--fault); color: var(--fault); }
+  button[disabled] { opacity: .4; cursor: not-allowed; }
+
+  /* ---------- masthead ---------- */
+  header {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 14px 0 13px;
+    background: linear-gradient(var(--bg) 72%, #080B09E0);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(8px);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; margin-right: 4px; }
+  .brand h1 {
+    margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.01em;
+    white-space: nowrap;
+  }
+  .brand .sub {
+    font-family: var(--f-mono); font-size: 10px; color: var(--ink-faint);
+    letter-spacing: .1em; text-transform: uppercase;
+  }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint);
+           flex: none; }
+  .pulse.on { background: var(--live); box-shadow: 0 0 0 0 #35D07F80;
+              animation: beat 2.4s ease-out infinite; }
+  @keyframes beat {
+    0%   { box-shadow: 0 0 0 0 #35D07F66; }
+    70%  { box-shadow: 0 0 0 7px #35D07F00; }
+    100% { box-shadow: 0 0 0 0 #35D07F00; }
+  }
+  @media (prefers-reduced-motion: reduce) { .pulse.on { animation: none; } }
+  .grow { flex: 1 1 auto; }
+  .chip {
+    font-family: var(--f-mono); font-size: 11px; color: var(--ink-dim);
+    border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px;
+    white-space: nowrap;
+  }
+  .chip.good { color: var(--live); border-color: #24503B; }
+  .chip.bad  { color: var(--fault); border-color: #5A2320; }
+
+  /* ---------- faults ---------- */
+  #faults { margin-top: 16px; display: grid; gap: 8px; }
+  .fault {
+    display: flex; gap: 13px; align-items: flex-start;
+    padding: 13px 15px; border-radius: var(--r); border: 1px solid;
+  }
+  .fault .mark { font-family: var(--f-mono); font-size: 13px; line-height: 1.35; }
+  .fault .ft { font-weight: 620; font-size: 13.5px; }
+  .fault .fd { font-size: 12.5px; opacity: .9; margin-top: 2px; }
+  .fault .fa { font-size: 12.5px; opacity: .72; margin-top: 4px; }
+  .f-critical { border-color: #5A2320; background: #170F0F; color: #FBB4AF; }
+  .f-warning  { border-color: #4E3818; background: #16120B; color: #F5CE86; }
+  .f-info     { border-color: var(--line); background: var(--surface); color: var(--ink-dim); }
+
+  /* ---------- KPI strip ---------- */
+  .kpis {
+    display: grid; gap: 12px; margin-top: 18px;
+    grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 14px 16px 13px;
+  }
+  .kpi .k {
+    font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 600;
+  }
+  .kpi .v {
+    font-family: var(--f-mono); font-size: 30px; line-height: 1.1; margin-top: 6px;
+    font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+  }
+  .kpi .n { font-size: 11.5px; color: var(--ink-dim); margin-top: 3px; }
+  .kpi.accent .v { color: var(--live); }
+
+  /* ---------- asset grid ---------- */
+  .unit { margin-top: 26px; }
+  .unit-head {
+    display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--line-soft);
+  }
+  .unit-head h2 {
+    margin: 0; font-size: 12px; font-weight: 650; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-dim);
+  }
+  .unit-head .count {
+    font-family: var(--f-mono); font-size: 11px; color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .grid {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+  }
+  .asset {
+    position: relative; overflow: hidden;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 14px 15px 12px;
+    transition: border-color .25s, background .25s;
+  }
+  .asset::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--free); transition: background .25s;
+  }
+  .asset .nm { font-weight: 620; font-size: 14.5px; letter-spacing: -.005em; }
+  .asset .st {
+    font-family: var(--f-mono); font-size: 12px; margin-top: 7px;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .asset .st .dotm { width: 6px; height: 6px; border-radius: 50%;
+                     background: var(--free); flex: none; }
+  .asset .meta {
+    font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint);
+    margin-top: 9px; font-variant-numeric: tabular-nums;
+  }
+  .tags { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 9px; }
+  .tag {
+    font-size: 9.5px; letter-spacing: .07em; text-transform: uppercase;
+    font-weight: 600; color: var(--ink-faint);
+    border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px;
+  }
+  /* state -> colour. Brightness is activity; red only ever means broken. */
+  .s-active   { --c: var(--live); }
+  .s-occupied { --c: var(--idle); }
+  .s-idle     { --c: var(--idle); }
+  .s-available{ --c: var(--free); }
+  .s-degraded { --c: var(--degraded); }
+  .s-unknown  { --c: var(--fault); }
+  .asset[class*="s-"]::before { background: var(--c); }
+  .asset[class*="s-"] .dotm   { background: var(--c); }
+  .asset[class*="s-"] .st     { color: var(--c); }
+  .asset.s-active  { border-color: #24503B; background: #0E1712; }
+  .asset.s-unknown { border-color: #3A1E1C; }
+
+  /* ---------- panels ---------- */
+  .panels {
+    display: grid; gap: 14px; margin-top: 28px;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  }
+  .panel {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 15px 16px 14px; min-width: 0;
+  }
+  .panel.wide { grid-column: 1 / -1; }
+  .panel h2 {
+    margin: 0 0 11px; font-size: 11px; font-weight: 650; letter-spacing: .11em;
+    text-transform: uppercase; color: var(--ink-dim);
+    display: flex; align-items: baseline; gap: 9px;
+  }
+  .panel h2 .n {
+    font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint);
+    letter-spacing: 0; text-transform: none;
+  }
+  .rows { display: grid; gap: 6px; max-height: 340px; overflow-y: auto; }
+  .row {
+    display: flex; align-items: center; gap: 9px; min-width: 0;
+    padding: 8px 10px; border: 1px solid var(--line-soft); border-radius: 9px;
+    background: var(--surface-2); font-size: 12.5px;
+  }
+  .row .g { flex: 1 1 auto; min-width: 0; }
+  .row .t {
+    font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint);
+    white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  .row .name { font-weight: 580; }
+  .row img {
+    width: 60px; height: 40px; object-fit: cover; border-radius: 6px;
+    border: 1px solid var(--line); flex: none;
+  }
+  .badge {
+    font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase;
+    font-weight: 650; padding: 2px 7px; border-radius: 5px;
+    border: 1px solid var(--line); color: var(--ink-dim); white-space: nowrap;
+  }
+  .b-detected  { color: var(--idle);  border-color: #4E3818; }
+  .b-confirmed { color: var(--live);  border-color: #24503B; }
+  .b-corrected { color: #6FA8DC;      border-color: #24405A; }
+  .b-voided    { color: var(--ink-faint); text-decoration: line-through; }
+  .b-critical  { color: var(--fault); border-color: #5A2320; }
+  .b-warning   { color: var(--idle);  border-color: #4E3818; }
+  .mini { font-size: 10.5px; padding: 3px 8px; border-radius: 6px; }
+  .muted { color: var(--ink-faint); font-size: 12.5px; }
+  .empty { color: var(--ink-faint); font-size: 12.5px; padding: 10px 2px; }
+
+  /* ---------- system check ---------- */
+  details.diag {
+    margin-top: 22px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: var(--r);
+  }
+  details.diag > summary {
+    cursor: pointer; padding: 13px 16px; font-size: 11px; font-weight: 650;
+    letter-spacing: .11em; text-transform: uppercase; color: var(--ink-dim);
+    list-style: none;
+  }
+  details.diag > summary::-webkit-details-marker { display: none; }
+  details.diag > summary::before { content: "+  "; font-family: var(--f-mono); }
+  details.diag[open] > summary::before { content: "\2212  "; }
+  details.diag > summary:hover { color: var(--ink); }
+  .diag-body { padding: 0 16px 16px; }
+  .diag h3 {
+    font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-faint); margin: 18px 0 8px; font-weight: 650;
+  }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th {
+    text-align: left; padding: 7px 9px; color: var(--ink-faint); font-weight: 600;
+    font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+    border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  td { padding: 7px 9px; border-bottom: 1px solid var(--line-soft);
+       vertical-align: top; }
+  td.k, td.v { font-family: var(--f-mono); white-space: nowrap; }
+  td.v { color: var(--ink); font-variant-numeric: tabular-nums; }
+  td.d { color: var(--ink-faint); }
+  .src-environment, .src-env-file { color: var(--live); border-color: #24503B; }
+  .src-default { color: var(--ink-faint); }
+  .src-unset   { color: #3E4B44; }
+  .w { padding: 9px 12px; border-radius: 9px; margin-bottom: 6px; font-size: 12.5px;
+       border: 1px solid var(--line); }
+  .w-error { border-color: #5A2320; background: #170F0F; color: #FBB4AF; }
+  .w-warn  { border-color: #4E3818; background: #16120B; color: #F5CE86; }
+  .w-info  { color: var(--ink-faint); }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 0 13px 48px; }
+    header { gap: 9px; padding: 11px 0; }
+    .brand .sub { display: none; }
+    .kpi .v { font-size: 25px; }
+    .rows { max-height: none; }
+  }
+</style>
 </head>
 <body>
+<div class="wrap">
+
   <header>
-    <span class="dot" id="dot"></span>
-    <h1>Strikee Vision — Local Core</h1>
-    <span class="muted" id="version"></span>
-    <span class="badge" id="syncBadge" title="cloud sync health" style="display:none"></span>
-    <div class="spacer"></div>
-    <select id="venueSelect"></select>
-    <button id="startBtn">Start pipeline</button>
+    <div class="brand">
+      <span class="pulse" id="dot"></span>
+      <h1>Strikee Vision</h1>
+      <span class="sub" id="version"></span>
+    </div>
+    <select id="venueSelect" title="Venue"></select>
+    <button id="startBtn" class="primary">Start pipeline</button>
     <button id="stopBtn">Stop</button>
+    <span class="grow"></span>
+    <span class="chip" id="syncBadge"></span>
     <button id="renameBtn" title="Rename this venue">Rename</button>
     <button id="deleteBtn" class="danger" title="Delete this venue and all its data">Delete</button>
   </header>
-  <main>
-    <div id="faults"></div>
-    <div class="statusbar" id="statusbar"></div>
-    <div class="statusbar" id="analytics"></div>
-    <div class="grid" id="grid"></div>
-    <div class="muted" id="empty" style="margin-top:16px"></div>
-    <div class="panels">
-      <div class="panel">
-        <h2>Sessions</h2>
-        <div id="sessions"></div>
-      </div>
-      <div class="panel">
-        <h2>Recent events</h2>
-        <div id="events"></div>
-      </div>
-      <div class="panel">
-        <h2>Notifications</h2>
-        <div id="notifications"></div>
-      </div>
-      <div class="panel" style="grid-column: 1 / -1;">
-        <h2>Games today (with evidence snapshots)</h2>
-        <div id="games"></div>
-      </div>
+
+  <div id="faults"></div>
+  <div class="kpis" id="kpis"></div>
+  <div id="units"></div>
+  <div class="empty" id="empty"></div>
+
+  <div class="panels">
+    <div class="panel wide">
+      <h2>Games today <span class="n" id="gamesCount"></span></h2>
+      <div class="rows" id="games"></div>
     </div>
+    <div class="panel">
+      <h2>Sessions <span class="n">most recent</span></h2>
+      <div class="rows" id="sessions"></div>
+    </div>
+    <div class="panel">
+      <h2>Alerts</h2>
+      <div class="rows" id="notifications"></div>
+    </div>
+    <div class="panel wide">
+      <h2>Activity <span class="n">live event stream</span></h2>
+      <div class="rows" id="events"></div>
+    </div>
+  </div>
 
-    <details class="diag" id="diag">
-      <summary>System check &mdash; is everything actually configured?</summary>
-      <div class="diag-body" id="diagBody">Open to load.</div>
-    </details>
-  </main>
+  <details class="diag" id="diag">
+    <summary>System check &mdash; is everything actually configured?</summary>
+    <div class="diag-body" id="diagBody">Open to load.</div>
+  </details>
+</div>
 
-  <script>
-    let ws = null, currentVenue = null, assets = {};
+<script>
+let ws = null, currentVenue = null, assets = {}, lookup = {units: {}, kinds: {}};
 
-    const labelClass = (label) => {
-      if (label === 'Available') return 's-available';
-      if (label === 'Active (In Use)') return 's-active';
-      if (label === 'Occupied – Idle') return 's-idle';
-      if (label === 'Occupied') return 's-occupied';
-      if (label === 'Degraded') return 's-degraded';
-      return 's-unknown';
-    };
+function esc(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
-    function renderGrid() {
-      const grid = document.getElementById('grid');
-      const list = Object.values(assets);
-      document.getElementById('empty').textContent =
-        list.length ? '' : 'No assets configured for this venue yet.';
-      grid.innerHTML = list.map(a => `
-        <div class="asset ${labelClass(a.label)}">
-          <div class="name">${a.name}</div>
-          <div class="label">${a.label || 'Unknown'}</div>
-          <div class="meta">presence: ${a.presence||'-'} · activity: ${a.activity||'-'}
-               · health: ${a.health||'-'}${a.confidence!=null?` · conf ${a.confidence}`:''}</div>
-        </div>`).join('');
-    }
+/* Relative time reads better than a wall clock on a dashboard you glance at:
+   "4m ago" answers "is this current?" without arithmetic. */
+function ago(iso) {
+  if (!iso) return '';
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 45) return Math.round(s) + 's ago';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+function clock(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return String(d.getHours()).padStart(2, '0') + ':' +
+         String(d.getMinutes()).padStart(2, '0');
+}
+function mins(sec) {
+  if (sec == null) return '';
+  return sec >= 3600 ? (sec / 3600).toFixed(1) + 'h' : Math.round(sec / 60) + 'm';
+}
+function stateClass(label) {
+  const l = (label || '').toLowerCase();
+  if (l.includes('active') || l.includes('in use')) return 's-active';
+  if (l.includes('idle')) return 's-idle';
+  if (l.includes('occupied')) return 's-occupied';
+  if (l.includes('available')) return 's-available';
+  if (l.includes('degraded')) return 's-degraded';
+  return 's-unknown';
+}
 
-    async function loadAssets(venueId) {
-      assets = {};
-      const res = await fetch(`/api/assets?venue_id=${venueId}`);
-      for (const a of await res.json()) {
-        assets[a.id] = { asset_id: a.id, name: a.name, label: 'Unknown' };
+/* ---------------- assets, grouped by business unit ---------------- */
+
+function renderGrid() {
+  const list = Object.values(assets);
+  const host = document.getElementById('units');
+  if (!list.length) { host.innerHTML = ''; return; }
+
+  const groups = {};
+  for (const a of list) {
+    const key = a.business_unit_id || '_';
+    (groups[key] = groups[key] || []).push(a);
+  }
+  const order = Object.keys(groups).sort((a, b) =>
+    (lookup.units[a] || 'zzz').localeCompare(lookup.units[b] || 'zzz'));
+
+  host.innerHTML = order.map(key => {
+    const items = groups[key].sort((x, y) => x.name.localeCompare(y.name));
+    const busy = items.filter(a => stateClass(a.label) === 's-active' ||
+                                   stateClass(a.label) === 's-occupied' ||
+                                   stateClass(a.label) === 's-idle').length;
+    const title = lookup.units[key] || 'Unassigned';
+    return `
+      <section class="unit">
+        <div class="unit-head">
+          <h2>${esc(title)}</h2>
+          <span class="count">${busy} of ${items.length} in use</span>
+        </div>
+        <div class="grid">${items.map(assetTile).join('')}</div>
+      </section>`;
+  }).join('');
+}
+
+function assetTile(a) {
+  const cls = stateClass(a.label);
+  const kinds = lookup.kinds[a.asset_id] || [];
+  const tags = kinds.map(k => `<span class="tag">${esc(
+    k === 'snooker_game' ? 'table' : k === 'screen' ? 'screen' : k)}</span>`).join('');
+  const conf = a.confidence ? Math.round(a.confidence * 100) + '%' : '';
+  return `
+    <article class="asset ${cls}">
+      <div class="nm">${esc(a.name)}</div>
+      <div class="st"><span class="dotm"></span>${esc(a.label)}</div>
+      <div class="meta">${esc(ago(a.effective_at))}${conf ? ' &middot; ' + conf : ''}</div>
+      ${tags ? `<div class="tags">${tags}</div>` : ''}
+    </article>`;
+}
+
+function applySnapshot(snaps) {
+  for (const s of snaps) assets[s.asset_id] = s;
+  renderGrid();
+  renderKpis();
+}
+
+/* ---------------- headline numbers ---------------- */
+
+let todayGames = 0, todaySessions = 0, camerasLive = null;
+
+function renderKpis() {
+  const list = Object.values(assets);
+  const busy = list.filter(a => ['s-active', 's-occupied', 's-idle']
+    .includes(stateClass(a.label))).length;
+  const bad = list.filter(a => ['s-unknown', 's-degraded']
+    .includes(stateClass(a.label))).length;
+
+  const cards = [
+    { k: 'In use now', v: list.length ? `${busy}/${list.length}` : '--',
+      n: busy ? 'earning' : 'all free', accent: busy > 0 },
+    { k: 'Games today', v: todayGames || '0', n: 'counted from racks' },
+    { k: 'Sessions today', v: todaySessions || '0', n: 'occupancy periods' },
+    { k: 'Cameras', v: camerasLive == null ? '--' : camerasLive,
+      n: bad ? `${bad} asset(s) unhealthy` : 'all reporting' },
+  ];
+  document.getElementById('kpis').innerHTML = cards.map(c => `
+    <div class="kpi ${c.accent ? 'accent' : ''}">
+      <div class="k">${esc(c.k)}</div>
+      <div class="v">${esc(c.v)}</div>
+      <div class="n">${esc(c.n)}</div>
+    </div>`).join('');
+}
+
+/* ---------------- panels ---------------- */
+
+async function loadGames() {
+  if (!currentVenue) return;
+  const today = new Date().toLocaleDateString('en-CA');
+  let games = [];
+  try {
+    games = await (await fetch(
+      `/api/venues/${currentVenue}/games?date=${today}`)).json();
+  } catch (e) { return; }
+  todayGames = games.length;
+  document.getElementById('gamesCount').textContent =
+    games.length ? `${games.length} today` : '';
+  document.getElementById('games').innerHTML = games.length ? games.map(g => `
+    <div class="row">
+      ${g.snapshot ? `<img src="/snapshots/${esc(g.snapshot)}" alt="">` : ''}
+      <div class="g">
+        <div class="name">${esc(g.table)}</div>
+        <div class="muted">${esc(clock(g.start_ts))}${g.end_ts ? ' &rarr; ' +
+          esc(clock(g.end_ts)) : ' &middot; in play'}</div>
+      </div>
+      <span class="t">${g.duration_sec ? esc(mins(g.duration_sec)) : ''}</span>
+    </div>`).join('') :
+    '<div class="empty">No games counted yet today.</div>';
+  renderKpis();
+}
+
+async function loadSessions() {
+  if (!currentVenue) return;
+  let rows = [];
+  try {
+    rows = await (await fetch(
+      `/api/venues/${currentVenue}/sessions?limit=30`)).json();
+  } catch (e) { return; }
+  const today = new Date().toLocaleDateString('en-CA');
+  todaySessions = rows.filter(s => (s.start_ts || '').startsWith(today)).length;
+  document.getElementById('sessions').innerHTML = rows.length ? rows.map(s => `
+    <div class="row">
+      <div class="g">
+        <div class="name">${esc(assetName(s.asset_id))}</div>
+        <div class="muted">${esc(clock(s.start_ts))}${s.end_ts ?
+          ' &rarr; ' + esc(clock(s.end_ts)) : ' &middot; open'}</div>
+      </div>
+      <span class="t">${s.duration_sec ? esc(mins(s.duration_sec)) : ''}</span>
+      <span class="badge b-${esc(s.status)}">${esc(s.status)}</span>
+    </div>`).join('') : '<div class="empty">No sessions yet.</div>';
+  renderKpis();
+}
+
+function assetName(id) {
+  return (assets[id] && assets[id].name) || lookup.names?.[id] || '—';
+}
+
+async function loadEvents() {
+  if (!currentVenue) return;
+  let rows = [];
+  try {
+    rows = await (await fetch(
+      `/api/venues/${currentVenue}/events?limit=30`)).json();
+  } catch (e) { return; }
+  document.getElementById('events').innerHTML = rows.length ? rows.map(e => `
+    <div class="row">
+      <span class="badge">${esc((e.type || '').replace(/_/g, ' '))}</span>
+      <div class="g"><span class="name">${esc(assetName(e.asset_id))}</span>
+        ${e.label ? ` <span class="muted">&rarr; ${esc(e.label)}</span>` : ''}</div>
+      <span class="t">${esc(ago(e.ts))}</span>
+    </div>`).join('') : '<div class="empty">Nothing yet.</div>';
+}
+
+async function loadNotifications() {
+  if (!currentVenue) return;
+  let rows = [];
+  try {
+    rows = await (await fetch(
+      `/api/venues/${currentVenue}/notifications?limit=30`)).json();
+  } catch (e) { return; }
+  document.getElementById('notifications').innerHTML = rows.length ? rows.map(n => `
+    <div class="row">
+      <span class="badge b-${esc(n.severity)}">${esc(n.severity)}</span>
+      <div class="g"><span class="name">${esc(n.title || '')}</span></div>
+      <span class="t">${esc(ago(n.created_at))}</span>
+      ${n.status === 'pending' ? `<button class="mini"
+        onclick="notifAction('${esc(n.id)}','ack')">Ack</button>` : ''}
+    </div>`).join('') : '<div class="empty">Nothing to report.</div>';
+}
+
+async function notifAction(id, action) {
+  await fetch(`/api/notifications/${id}/${action}`, { method: 'POST' });
+  loadNotifications();
+}
+
+/* ---------------- status ---------------- */
+
+async function refreshStatus() {
+  if (!currentVenue) return;
+  try {
+    const s = await (await fetch(
+      `/api/venues/${currentVenue}/pipeline/status`)).json();
+    const running = !!s.running;
+    document.getElementById('dot').classList.toggle('on', running);
+    document.getElementById('startBtn').disabled = running;
+    document.getElementById('stopBtn').disabled = !running;
+  } catch (e) { /* leave the last known state rather than flickering */ }
+}
+
+async function refreshSync() {
+  const el = document.getElementById('syncBadge');
+  try {
+    const s = await (await fetch('/api/sync-health')).json();
+    if (!s.sync_enabled) { el.textContent = 'local only'; el.className = 'chip'; return; }
+    el.textContent = s.healthy
+      ? `synced ${s.seconds_since_sync == null ? '' : Math.round(s.seconds_since_sync) + 's ago'}`
+      : 'NOT syncing';
+    el.className = 'chip ' + (s.healthy ? 'good' : 'bad');
+  } catch (e) { el.textContent = ''; }
+}
+
+const FAULT_MARK = { critical: '!!', warning: '!', info: 'i' };
+
+async function loadFaults() {
+  let faults = [];
+  try {
+    faults = (await (await fetch('/api/system-health')).json()).faults || [];
+  } catch (e) { return; }
+  document.getElementById('faults').innerHTML = faults.map(f => `
+    <div class="fault f-${esc(f.severity)}">
+      <div class="mark">${FAULT_MARK[f.severity] || ''}</div>
+      <div class="g">
+        <div class="ft">${esc(f.title)}</div>
+        <div class="fd">${esc(f.detail)}</div>
+        <div class="fa">${esc(f.action)}</div>
+      </div>
+    </div>`).join('');
+}
+
+/* ---------------- system check ---------------- */
+
+const DIAG_GROUPS = [
+  ['capture', 'Capture &amp; streams'], ['state', 'Occupancy timing'],
+  ['snooker', 'Game counting'], ['models', 'Models'],
+  ['storage', 'Storage'], ['cloud', 'Cloud'], ['runtime', 'Unattended run'],
+];
+
+async function loadDiagnostics() {
+  const el = document.getElementById('diagBody');
+  let d;
+  try { d = await (await fetch('/api/diagnostics')).json(); }
+  catch (e) { el.innerHTML = '<div class="w w-error">Could not load.</div>'; return; }
+
+  const out = [d.warnings.map(w =>
+    `<div class="w w-${esc(w.level)}">${esc(w.text)}</div>`).join('')];
+
+  out.push('<h3>This machine</h3><div class="scroll"><table><tbody>');
+  out.push(`<tr><td class="k">python</td><td class="v">${esc(d.host.python)}</td>
+            <td class="d">${esc(d.host.platform)}</td></tr>`);
+  for (const lib of ['torch', 'numpy', 'opencv', 'ultralytics', 'libsql']) {
+    out.push(`<tr><td class="k">${lib}</td><td class="v">${d.perception[lib]
+      ? esc(d.perception[lib]) : '<span class="src-unset">not installed</span>'}</td>
+      <td class="d"></td></tr>`);
+  }
+  for (const m of d.models) {
+    out.push(`<tr><td class="k">${esc(m.role)} model</td><td class="v">${m.exists
+      ? esc(m.size_mb) + ' MB' : '<span class="src-unset">MISSING</span>'}</td>
+      <td class="d">${esc(m.path)}</td></tr>`);
+  }
+  out.push(`<tr><td class="k">database</td><td class="v">${esc(d.database.path)}</td>
+            <td class="d">${d.database.sync ? esc(d.database.sync.backend || '')
+            : 'local only'}</td></tr>`);
+  if (d.env_file && d.env_file.path) {
+    out.push(`<tr><td class="k">.env</td><td class="v">${esc(d.env_file.keys)} keys</td>
+              <td class="d">${esc(d.env_file.path)}</td></tr>`);
+  }
+  out.push('</tbody></table></div>');
+
+  let anyCam = 0;
+  for (const v of d.running) {
+    if (v.cameras.length) {
+      anyCam += v.cameras.length;
+      out.push('<h3>Cameras</h3><div class="scroll"><table><thead><tr>' +
+        '<th>Source</th><th>Every</th><th>Last try</th><th>Failures</th>' +
+        '</tr></thead><tbody>');
+      for (const c of v.cameras) {
+        const bad = c.consecutive_failures > 0;
+        out.push(`<tr><td class="k">${esc(String(c.source_id).slice(0, 10))}</td>
+          <td class="v">${esc(c.interval_sec)}s${bad ? ' &rarr; ' +
+            esc(c.effective_interval_sec) + 's' : ''}</td>
+          <td class="v">${c.last_started_ago_sec == null ? '&mdash;'
+            : esc(c.last_started_ago_sec) + 's ago'}</td>
+          <td class="v" style="${bad ? 'color:var(--fault)' : ''}">
+            ${esc(c.consecutive_failures)}</td></tr>`);
       }
-      renderGrid();
-    }
-
-    function applySnapshot(list) {
-      for (const s of list) {
-        assets[s.asset_id] = { ...assets[s.asset_id], ...s };
-      }
-      renderGrid();
-    }
-
-    function connectWs(venueId) {
-      if (ws) { ws.close(); ws = null; }
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${proto}://${location.host}/ws/venues/${venueId}`);
-      ws.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'state') applySnapshot(msg.assets);
-      };
-    }
-
-    async function refreshStatus() {
-      if (!currentVenue) return;
-      const s = await (await fetch(`/api/venues/${currentVenue}/pipeline/status`)).json();
-      document.getElementById('statusbar').textContent =
-        `pipeline: ${s.running ? 'running' : 'stopped'} · assets ${s.assets} · sources ${s.sources} · every ${s.interval_sec}s`;
-    }
-
-    async function refreshSync() {
-      const el = document.getElementById('syncBadge');
-      let s;
-      try { s = await (await fetch('/api/sync-health')).json(); }
-      catch { return; }
-      if (!s.sync_enabled) { el.style.display = 'none'; return; }  // local-only: hide
-      el.style.display = '';
-      const age = s.seconds_since_sync;
-      const ago = age == null ? 'never' :
-        (age < 90 ? `${Math.round(age)}s ago` : `${Math.round(age/60)}m ago`);
-      if (s.healthy) {
-        el.textContent = `☁ synced ${ago}`;
-        el.style.color = '#22c55e'; el.style.borderColor = '#245e37';
-        el.title = `cloud sync OK · ${s.sync_count} syncs · last ${s.last_success_at || '—'}`;
-      } else {
-        el.textContent = `⚠ NOT syncing (${ago})`;
-        el.style.color = '#ef4444'; el.style.borderColor = '#7f1d1d';
-        el.title = `sync stalled · ${s.consecutive_failures} fails · ${s.last_error || 'no successful sync yet'}`;
-      }
-    }
-
-    const assetName = (id) => (assets[id] && assets[id].name) || id?.slice(0, 6) || '—';
-    const shortTime = (ts) => ts ? new Date(ts).toLocaleTimeString() : '—';
-    const dur = (sec) => sec == null ? 'open' :
-      (sec >= 60 ? `${Math.floor(sec/60)}m ${sec%60}s` : `${sec}s`);
-
-    async function reviewAction(id, action) {
-      await fetch(`/api/sessions/${id}/${action}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ actor: 'dashboard' }),
-      });
-      loadSessions();
-    }
-    window.reviewAction = reviewAction;
-
-    async function loadSessions() {
-      if (!currentVenue) return;
-      const rows = await (await fetch(`/api/venues/${currentVenue}/sessions?limit=30`)).json();
-      document.getElementById('sessions').innerHTML = rows.length ? rows.map(s => `
-        <div class="row">
-          <span class="grow">${assetName(s.asset_id)}
-            <span class="ts">${shortTime(s.start_ts)} → ${s.end_ts ? shortTime(s.end_ts) : 'now'} · ${dur(s.duration_sec)}</span>
-          </span>
-          <span class="badge b-${s.status}">${s.status}</span>
-          ${s.status !== 'voided' ? `
-            <button class="mini" onclick="reviewAction('${s.id}','confirm')">✓</button>
-            <button class="mini" onclick="reviewAction('${s.id}','void')">✕</button>` : ''}
-        </div>`).join('') : '<div class="muted">No sessions yet.</div>';
-    }
-
-    async function loadAnalytics() {
-      if (!currentVenue) return;
-      const a = await (await fetch(`/api/venues/${currentVenue}/analytics/summary`)).json();
-      const o = a.overview || {};
-      const bu = (a.by_business_unit || []).map(b =>
-        `${b.business_unit_id}: ${b.session_count} sessions`).join(' · ');
-      document.getElementById('analytics').textContent =
-        `today: ${o.active_sessions||0} active · ${o.total_sessions||0} sessions · ${o.total_events||0} events${bu ? '  —  ' + bu : ''}`;
-    }
-
-    async function loadEvents() {
-      if (!currentVenue) return;
-      const rows = await (await fetch(`/api/venues/${currentVenue}/events?limit=30`)).json();
-      document.getElementById('events').innerHTML = rows.length ? rows.map(e => `
-        <div class="row">
-          <span class="grow">${assetName(e.asset_id)}
-            <span class="ts">${e.type}${e.label ? ' · ' + e.label : ''}</span>
-          </span>
-          <span class="ts">${shortTime(e.ts)}</span>
-        </div>`).join('') : '<div class="muted">No events yet.</div>';
-    }
-
-    async function notifAction(id, action) {
-      await fetch(`/api/notifications/${id}/${action}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ actor: 'dashboard' }),
-      });
-      loadNotifications();
-    }
-    window.notifAction = notifAction;
-
-    async function loadNotifications() {
-      if (!currentVenue) return;
-      const rows = await (await fetch(`/api/venues/${currentVenue}/notifications?limit=30`)).json();
-      const open = rows.filter(n => n.status !== 'resolved');
-      document.getElementById('notifications').innerHTML = open.length ? open.map(n => `
-        <div class="row">
-          <span class="grow">${n.title || n.severity}
-            <span class="ts">${n.message || ''}</span>
-          </span>
-          <span class="badge">${n.severity}</span>
-          <span class="badge">${n.status}</span>
-          ${n.status !== 'resolved' ? `
-            <button class="mini" onclick="notifAction('${n.id}','ack')">ack</button>
-            <button class="mini" onclick="notifAction('${n.id}','resolve')">✓</button>` : ''}
-        </div>`).join('') : '<div class="muted">No open notifications.</div>';
-    }
-
-    async function loadGames() {
-      if (!currentVenue) return;
-      const today = new Date().toISOString().slice(0, 10);
-      const data = await (await fetch(`/api/venues/${currentVenue}/games?date=${today}`)).json();
-      const g = document.getElementById('games');
-      g.innerHTML = data.games.length ? (
-        `<div class="muted" style="margin-bottom:6px">${data.count} game(s) today</div>` +
-        data.games.map(x => `
-        <div class="row">
-          ${x.snapshot ? `<a href="${x.snapshot}" target="_blank"><img src="${x.snapshot}" style="height:44px;border-radius:4px;border:1px solid #2b3240"></a>` : ''}
-          <span class="grow">${x.table}
-            <span class="ts">${shortTime(x.start_ts)}${x.end_ts ? ' → ' + shortTime(x.end_ts) : ' (in progress)'}${x.duration_sec != null ? ' · ' + dur(x.duration_sec) : ''}</span>
-          </span>
-        </div>`).join('')) : '<div class="muted">No games recorded today yet.</div>';
-    }
-
-    async function selectVenue(venueId) {
-      currentVenue = venueId;
-      await loadAssets(venueId);
-      connectWs(venueId);
-      refreshStatus();
-      loadSessions();
-      loadEvents();
-      loadAnalytics();
-      loadNotifications();
-      loadGames();
-    }
-
-
-    function esc(v) {
-      return String(v == null ? '' : v)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-
-    const DIAG_GROUPS = [
-      ['capture', 'Capture &amp; streams'], ['state', 'Occupancy timing'],
-      ['snooker', 'Game counting'], ['models', 'Models'],
-      ['storage', 'Storage'], ['cloud', 'Cloud'], ['runtime', 'Unattended run'],
-    ];
-
-    async function loadDiagnostics() {
-      const el = document.getElementById('diagBody');
-      let d;
-      try {
-        d = await (await fetch('/api/diagnostics')).json();
-      } catch (e) {
-        el.innerHTML = '<div class="w w-error">Could not load diagnostics.</div>';
-        return;
-      }
-      const out = [];
-
-      out.push(d.warnings.map(w =>
-        `<div class="w w-${esc(w.level)}">${esc(w.text)}</div>`).join(''));
-
-      const p = d.perception;
-      out.push('<h3>This machine</h3><div class="scroll"><table><tbody>');
-      out.push(`<tr><td class="k">python</td><td class="v">${esc(p ? d.host.python : '')}</td>
-                    <td class="d">${esc(d.host.platform)}</td></tr>`);
-      for (const lib of ['torch', 'numpy', 'opencv', 'ultralytics', 'libsql']) {
-        const v = p[lib];
-        out.push(`<tr><td class="k">${lib}</td>
-          <td class="v">${v ? esc(v) : '<span class="src-unset">not installed</span>'}</td>
-          <td class="d"></td></tr>`);
-      }
-      for (const m of d.models) {
-        out.push(`<tr><td class="k">${esc(m.role)} model</td>
-          <td class="v">${m.exists ? esc(m.size_mb) + ' MB' : '<span class="src-unset">MISSING</span>'}</td>
-          <td class="d">${esc(m.path)}</td></tr>`);
-      }
-      out.push(`<tr><td class="k">database</td><td class="v">${esc(d.database.path)}</td>
-                    <td class="d">${d.database.sync ? 'cloud sync on' : 'local only'}</td></tr>`);
       out.push('</tbody></table></div>');
-
-      // Live capture health, only meaningful while a pipeline runs.
-      for (const v of d.running) {
-        if (v.cameras.length) {
-          out.push('<h3>Cameras (live)</h3><div class="scroll"><table><thead><tr>' +
-            '<th>Source</th><th>Every</th><th>Last try</th><th>Failures</th></tr></thead><tbody>');
-          for (const c of v.cameras) {
-            const bad = c.consecutive_failures > 0;
-            out.push(`<tr><td class="k">${esc(c.source_id).slice(0, 12)}</td>
-              <td class="v">${esc(c.interval_sec)}s${bad ? ' &rarr; ' + esc(c.effective_interval_sec) + 's' : ''}</td>
-              <td class="v">${c.last_started_ago_sec == null ? '&mdash;' : esc(c.last_started_ago_sec) + 's ago'}</td>
-              <td class="v" style="${bad ? 'color:#fca5a5' : ''}">${esc(c.consecutive_failures)}</td></tr>`);
-          }
-          out.push('</tbody></table></div>');
-        }
-        if (v.assets.length) {
-          out.push('<h3>Occupancy windows in effect</h3><div class="scroll">' +
-            '<table><thead><tr><th>Asset</th><th>Sampled</th>' +
-            '<th>Frees up after</th><th>Occupied after</th></tr></thead><tbody>');
-          for (const a of v.assets) {
-            out.push(`<tr><td>${esc(a.asset)}</td>
-              <td class="v">${a.interval_sec == null ? '&mdash;' : 'every ' + esc(a.interval_sec) + 's'}</td>
-              <td class="v">${a.exit_window_sec == null ? esc(a.exit_reads) + ' reads' :
-                   esc(a.exit_window_sec) + 's (' + esc(a.exit_reads) + ' reads)'}</td>
-              <td class="v">${a.enter_window_sec == null ? esc(a.enter_reads) + ' reads' :
-                   esc(a.enter_window_sec) + 's (' + esc(a.enter_reads) + ' reads)'}</td></tr>`);
-          }
-          out.push('</tbody></table></div>');
-        }
-      }
-      if (!d.running.length) {
-        out.push('<h3>Cameras</h3><div class="muted">Start the pipeline to see live ' +
-                 'capture health and the occupancy windows each asset ends up with.</div>');
-      }
-
-      // Settings, grouped. "environment" means it really reached this process -
-      // which is the whole question on Windows, where `set` is per-window.
-      out.push('<h3>Settings</h3><div class="muted" style="margin-bottom:8px">' +
-        'Green = read from the environment. Grey = built-in default, i.e. your ' +
-        '<code>set</code> did not reach this process.</div>');
-      out.push('<div class="scroll"><table><thead><tr><th>Setting</th><th>In effect</th>' +
-               '<th>From</th><th>What it does</th></tr></thead><tbody>');
-      for (const [g, title] of DIAG_GROUPS) {
-        const rows = d.config.filter(c => c.group === g);
-        if (!rows.length) continue;
-        out.push(`<tr><td colspan="4" style="color:#8b93a1;padding-top:12px">${title}</td></tr>`);
-        for (const c of rows) {
-          const val = c.error ? `<span style="color:#fca5a5">${esc(c.error)}</span>`
-                    : (c.value == null ? '<span class="src-unset">unset</span>' : esc(c.value));
-          out.push(`<tr><td class="k">${esc(c.name)}</td><td class="v">${val}</td>
-            <td><span class="badge src-${esc(c.source)}">${esc(c.source)}</span></td>
-            <td class="d">${esc(c.description)}</td></tr>`);
-        }
+    }
+    if (v.assets.length) {
+      out.push('<h3>Occupancy windows in effect</h3><div class="scroll"><table><thead>' +
+        '<tr><th>Asset</th><th>Sampled</th><th>Frees after</th><th>Occupied after</th>' +
+        '</tr></thead><tbody>');
+      for (const a of v.assets) {
+        out.push(`<tr><td>${esc(a.asset)}</td>
+          <td class="v">${a.interval_sec == null ? '&mdash;'
+            : 'every ' + esc(a.interval_sec) + 's'}</td>
+          <td class="v">${a.exit_window_sec == null ? esc(a.exit_reads) + ' reads'
+            : esc(a.exit_window_sec) + 's (' + esc(a.exit_reads) + ')'}</td>
+          <td class="v">${a.enter_window_sec == null ? esc(a.enter_reads) + ' reads'
+            : esc(a.enter_window_sec) + 's (' + esc(a.enter_reads) + ')'}</td></tr>`);
       }
       out.push('</tbody></table></div>');
-
-      el.innerHTML = out.join('');
     }
+  }
+  camerasLive = anyCam || null;
+  if (!d.running.length) {
+    out.push('<h3>Cameras</h3><div class="muted">Start the pipeline to see live ' +
+             'capture health and the windows each asset ends up with.</div>');
+  }
 
-
-    const FAULT_ICON = { critical: '✕', warning: '⚠', info: 'ℹ' };
-
-    async function loadFaults() {
-      let faults = [];
-      try {
-        faults = (await (await fetch('/api/system-health')).json()).faults || [];
-      } catch (e) { return; }
-      document.getElementById('faults').innerHTML = faults.map(f => `
-        <div class="fault f-${esc(f.severity)}">
-          <div class="fi">${FAULT_ICON[f.severity] || ''}</div>
-          <div class="grow">
-            <div class="ft">${esc(f.title)}</div>
-            <div class="fd">${esc(f.detail)}</div>
-            <div class="fa">${esc(f.action)}</div>
-          </div>
-        </div>`).join('');
+  out.push('<h3>Settings</h3><div class="muted" style="margin-bottom:8px">' +
+    'Green means it reached this process. Grey means the built-in default is ' +
+    'running, i.e. your <code>set</code> or <code>.env</code> did not arrive.</div>');
+  out.push('<div class="scroll"><table><thead><tr><th>Setting</th><th>In effect</th>' +
+           '<th>From</th><th>What it does</th></tr></thead><tbody>');
+  for (const [g, title] of DIAG_GROUPS) {
+    const rows = d.config.filter(c => c.group === g);
+    if (!rows.length) continue;
+    out.push(`<tr><td colspan="4" style="color:var(--ink-faint);padding-top:13px">
+              ${title}</td></tr>`);
+    for (const c of rows) {
+      const val = c.error ? `<span style="color:var(--fault)">${esc(c.error)}</span>`
+        : (c.value == null ? '<span class="src-unset">unset</span>' : esc(c.value));
+      out.push(`<tr><td class="k">${esc(c.name)}</td><td class="v">${val}</td>
+        <td><span class="badge src-${esc(String(c.source).replace(' ', '-'))}">
+        ${esc(c.source)}</span></td><td class="d">${esc(c.description)}</td></tr>`);
     }
+  }
+  out.push('</tbody></table></div>');
+  el.innerHTML = out.join('');
+  renderKpis();
+}
 
-    async function init() {
-      const h = await (await fetch('/health')).json();
-      document.getElementById('dot').classList.add('ok');
-      document.getElementById('version').textContent = 'v' + h.version;
+/* ---------------- venue ---------------- */
 
-      const venues = await (await fetch('/api/venues')).json();
-      const sel = document.getElementById('venueSelect');
-      sel.innerHTML = venues.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
-      sel.onchange = () => selectVenue(sel.value);
+function connectWs(venueId) {
+  if (ws) { try { ws.close(); } catch (e) {} }
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/venues/${venueId}`);
+  ws.onmessage = ev => {
+    try { applySnapshot(JSON.parse(ev.data).assets || []); } catch (e) {}
+  };
+}
 
-      document.getElementById('startBtn').onclick = async () => {
-        await fetch(`/api/venues/${currentVenue}/pipeline/start`, { method: 'POST' });
-        refreshStatus();
-      };
-      document.getElementById('stopBtn').onclick = async () => {
-        await fetch(`/api/venues/${currentVenue}/pipeline/stop`, { method: 'POST' });
-        refreshStatus();
-      };
+async function loadAssets(venueId) {
+  const [list, units, sensors] = await Promise.all([
+    fetch(`/api/assets?venue_id=${venueId}`).then(r => r.json()).catch(() => []),
+    fetch(`/api/business-units?venue_id=${venueId}`).then(r => r.json()).catch(() => []),
+    fetch(`/api/sensors`).then(r => r.json()).catch(() => []),
+  ]);
+  lookup.units = {}; lookup.kinds = {}; lookup.names = {};
+  for (const u of units) lookup.units[u.id] = u.name;
+  for (const s of sensors) {
+    (lookup.kinds[s.asset_id] = lookup.kinds[s.asset_id] || []);
+    if (!lookup.kinds[s.asset_id].includes(s.type)) lookup.kinds[s.asset_id].push(s.type);
+  }
+  assets = {};
+  for (const a of list) {
+    lookup.names[a.id] = a.name;
+    assets[a.id] = { asset_id: a.id, name: a.name,
+                     business_unit_id: a.business_unit_id,
+                     label: 'Unknown', confidence: 0, effective_at: null };
+  }
+  document.getElementById('empty').textContent = list.length ? '' :
+    'No assets yet. Run field_setup.py to draw zones for this venue.';
+  renderGrid();
+  renderKpis();
+}
 
-      document.getElementById('renameBtn').onclick = async () => {
-        const current = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
-        const name = prompt('New name for this venue:', current);
-        if (!name || !name.trim() || name === current) return;
-        const r = await fetch(`/api/venues/${currentVenue}/rename`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: name.trim() }),
-        });
-        if (!r.ok) { alert('Rename failed: ' + (await r.text())); return; }
-        location.reload();
-      };
+async function selectVenue(venueId) {
+  currentVenue = venueId;
+  await loadAssets(venueId);
+  connectWs(venueId);
+  refreshStatus(); loadSessions(); loadEvents(); loadNotifications(); loadGames();
+}
 
-      document.getElementById('deleteBtn').onclick = async () => {
-        // Say exactly what is about to be destroyed - "delete this venue?" is a
-        // very different question from "delete 4 tables and 1,182 events?".
-        const info = await (await fetch(`/api/venues/${currentVenue}/contents`)).json();
-        const c = info.counts;
-        const lines = [
-          `Delete "${info.venue.name}" and everything it holds?`, '',
-          `  ${c.assets} table(s)/station(s)`,
-          `  ${c.video_sources} camera(s)`,
-          `  ${c.sessions} session(s)`,
-          `  ${c.events} event(s)`,
-          `  ${c.snapshots} evidence snapshot(s)`, '',
-          'This cannot be undone.',
-        ];
-        if (!confirm(lines.join('\n'))) return;
-        if (!confirm(`Really delete "${info.venue.name}"? Last chance.`)) return;
-        const r = await fetch(`/api/venues/${currentVenue}`, { method: 'DELETE' });
-        if (!r.ok) { alert('Delete failed: ' + (await r.text())); return; }
-        location.reload();
-      };
+async function init() {
+  try {
+    const h = await (await fetch('/health')).json();
+    document.getElementById('version').textContent = 'v' + h.version;
+  } catch (e) {}
 
-      const diag = document.getElementById('diag');
-      diag.addEventListener('toggle', () => { if (diag.open) loadDiagnostics(); });
+  const venues = await (await fetch('/api/venues')).json();
+  const sel = document.getElementById('venueSelect');
+  sel.innerHTML = venues.map(v =>
+    `<option value="${esc(v.id)}">${esc(v.name)}</option>`).join('');
+  sel.onchange = () => selectVenue(sel.value);
 
-      if (venues.length) selectVenue(venues[0].id);
-      else document.getElementById('empty').textContent =
-        'No venues yet. Run field_setup.py to draw zones and create one.';
-      refreshSync();
-      loadFaults();
-      setInterval(() => {
-        refreshStatus(); refreshSync(); loadSessions(); loadEvents();
-        loadAnalytics(); loadNotifications(); loadGames(); loadFaults();
-        if (document.getElementById('diag').open) loadDiagnostics();
-      }, 5000);
-    }
-    init();
-  </script>
+  document.getElementById('startBtn').onclick = async () => {
+    await fetch(`/api/venues/${currentVenue}/pipeline/start`, { method: 'POST' });
+    refreshStatus();
+  };
+  document.getElementById('stopBtn').onclick = async () => {
+    await fetch(`/api/venues/${currentVenue}/pipeline/stop`, { method: 'POST' });
+    refreshStatus();
+  };
+
+  document.getElementById('renameBtn').onclick = async () => {
+    const current = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+    const name = prompt('New name for this venue:', current);
+    if (!name || !name.trim() || name === current) return;
+    const r = await fetch(`/api/venues/${currentVenue}/rename`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    if (!r.ok) { alert('Rename failed: ' + (await r.text())); return; }
+    location.reload();
+  };
+
+  document.getElementById('deleteBtn').onclick = async () => {
+    const info = await (await fetch(`/api/venues/${currentVenue}/contents`)).json();
+    const c = info.counts;
+    if (!confirm([`Delete "${info.venue.name}" and everything it holds?`, '',
+      `  ${c.assets} table(s)/station(s)`, `  ${c.video_sources} camera(s)`,
+      `  ${c.sessions} session(s)`, `  ${c.events} event(s)`,
+      `  ${c.snapshots} evidence snapshot(s)`, '',
+      'This cannot be undone.'].join('\n'))) return;
+    if (!confirm(`Really delete "${info.venue.name}"? Last chance.`)) return;
+    const r = await fetch(`/api/venues/${currentVenue}`, { method: 'DELETE' });
+    if (!r.ok) { alert('Delete failed: ' + (await r.text())); return; }
+    location.reload();
+  };
+
+  const diag = document.getElementById('diag');
+  diag.addEventListener('toggle', () => { if (diag.open) loadDiagnostics(); });
+
+  if (venues.length) selectVenue(venues[0].id);
+  else document.getElementById('empty').textContent =
+    'No venues yet. Run field_setup.py to draw zones and create one.';
+
+  refreshSync(); loadFaults(); renderKpis();
+  setInterval(() => {
+    refreshStatus(); refreshSync(); loadFaults();
+    loadSessions(); loadEvents(); loadNotifications(); loadGames();
+    if (diag.open) loadDiagnostics();
+  }, 5000);
+}
+init();
+</script>
 </body>
 </html>
