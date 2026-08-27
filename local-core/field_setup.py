@@ -191,7 +191,8 @@ def _find(repo, cur, **match):
 
 
 def write_config(db_path, source, venue_name, source_name, bu_name,
-                 asset_type_name, zones, mode="snooker_game") -> str:
+                 asset_type_name, zones, mode="snooker_game",
+                 attach=False, role=None) -> str:
     """Write (or extend) a venue config.
 
     A venue usually has several cameras, and you draw one channel per run - so
@@ -235,10 +236,12 @@ def write_config(db_path, source, venue_name, source_name, bu_name,
             print(f"  camera already configured as '{src['name']}' - adding these "
                   f"zones to it (re-running the same channel adds duplicates)")
 
-        if mode == "screen":
-            # A TV is not an asset - it is evidence about one. Each polygon
-            # attaches to the station of the same name, so a station is in use
-            # only when someone is there AND its screen is on.
+        # `attach` adds a sensor to an EXISTING asset matched by name instead of
+        # creating one. A TV is not an asset - it is evidence about one - and the
+        # same is true of a second view: a pool table watched for balls AND for
+        # people is one table with two sensors, not two tables.
+        if attach or mode == "screen":
+            sensor_role = role or ("supporting" if attach else "supporting")
             attached, missing = 0, []
             for z in zones:
                 asset = _find(repos["asset"], cur, venue_id=venue["id"], name=z["name"])
@@ -247,21 +250,19 @@ def write_config(db_path, source, venue_name, source_name, bu_name,
                     continue
                 zone = repos["zone"].create(cur, {
                     "space_id": asset["space_id"] or space["id"],
-                    "name": f"{z['name']} Screen",
+                    "name": f"{z['name']} {mode}",
                     "polygons": [z["polygon"]]})
                 repos["sensor"].create(cur, {
                     "asset_id": asset["id"], "video_source_id": src["id"],
-                    "zone_id": zone["id"], "type": "screen", "role": "supporting"})
+                    "zone_id": zone["id"], "type": mode, "role": sensor_role})
                 attached += 1
             if missing:
                 print(f"\n  NO ASSET NAMED: {', '.join(missing)}")
-                print("  A screen zone attaches to an existing station by name, so "
-                      "these were skipped.")
-                print("  Draw the station itself first (--mode occupancy), then "
-                      "re-run with names that match exactly.")
-            print(f"  attached {attached} screen zone(s)")
-            db.close()
-            return venue["id"]
+                print("  Attaching matches an existing asset by name, so these were "
+                      "skipped. Draw the asset itself first, then re-run with names "
+                      "that match exactly.")
+            print(f"  attached {attached} {mode} sensor(s) to existing asset(s)")
+            zones = []          # nothing left to create; fall through to the exit
 
         for z in zones:
             asset = repos["asset"].create(cur, {
@@ -290,6 +291,13 @@ def main():
                          "screen (a TV zone ATTACHED to an existing asset - name "
                          "each polygon exactly like the station it belongs to)")
     ap.add_argument("--db", default=os.environ.get("STRIKEE_DB", "strikee.db"))
+    ap.add_argument("--attach", action="store_true",
+                    help="add these zones as extra sensors on EXISTING assets of "
+                         "the same name, instead of creating new assets. Use it to "
+                         "watch one table both ways, or to add a second camera "
+                         "angle. (--mode screen always attaches.)")
+    ap.add_argument("--role", default=None, choices=["primary", "supporting"],
+                    help="sensor role when attaching (default supporting)")
     ap.add_argument("--aspect", default=os.environ.get("STRIKEE_PERSON_ASPECT"),
                     help="true scene aspect (e.g. 16:9) for channels that deliver "
                          "a squeezed frame - the editor unsqueezes it for drawing "
@@ -344,7 +352,8 @@ def main():
               f"Re-run and keep them apart if that area is reachable.")
 
     venue_id = write_config(args.db, args.source, args.venue, args.source_name,
-                            args.business_unit, args.asset_type, zones, mode=args.mode)
+                            args.business_unit, args.asset_type, zones,
+                            mode=args.mode, attach=args.attach, role=args.role)
     print(f"\nConfigured venue '{args.venue}' with {len(zones)} asset(s) in {args.db}")
     print(f"venue id: {venue_id}")
     print("\nNext: run  strikee-core  (or: python run_desktop.py), pick the venue,")

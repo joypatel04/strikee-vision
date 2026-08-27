@@ -277,8 +277,11 @@ deletes your database backups along with old snapshots.
   for `occupancy`, remembering people are placed at the *bottom-centre* of their
   box — for someone seated that is the seat, not the floor in front; the **panel
   only** for `screen`.
-- `--mode screen` **attaches** to an existing asset whose name matches the
-  polygon's, instead of creating one.
+- `--attach` adds the zones as **extra sensors on existing assets** of the same
+  name, rather than creating assets. Use it to watch one table both ways (balls
+  *and* people), or to add a second camera angle. `--mode screen` always
+  attaches. `--role` sets primary or supporting; the default is supporting, and
+  presence is *primary OR a confident supporting sensor*.
 - Overlapping zones are reported by name: a person is one point, so if it falls
   in two polygons both read occupied.
 - `--aspect 16:9` unsqueezes an anamorphic channel for drawing while still
