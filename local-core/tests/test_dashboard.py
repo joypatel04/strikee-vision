@@ -65,7 +65,6 @@ def test_features_are_present():
     page = _page()
     for feature, marker in [
         ("venue admin", 'id="renameBtn"'),
-        ("venue delete", 'id="deleteBtn"'),
         ("fault banner", 'id="faults"'),
         ("system check", 'id="diag"'),
         ("headline numbers", 'id="kpis"'),
@@ -83,3 +82,18 @@ def test_mobile_viewport_is_declared():
 
 def test_reduced_motion_is_respected():
     assert "prefers-reduced-motion" in _page()
+
+
+def test_delete_is_not_reachable_from_the_ui():
+    """Irreversible, and one mis-click from the header would take the venue,
+    every zone drawn for it and all its history. The API route stays."""
+    page = _page()
+    assert "deleteBtn'" not in page and 'deleteBtn"' not in page.split("<!--")[0]
+    assert "method: 'DELETE'" not in page, "the UI can still issue a delete"
+
+
+def test_the_delete_route_still_exists(client):
+    org = client.post("/api/organizations", json={"name": "T"}).json()
+    v = client.post("/api/venues", json={"organization_id": org["id"],
+                                         "name": "T"}).json()
+    assert client.delete(f"/api/venues/{v['id']}").status_code == 200

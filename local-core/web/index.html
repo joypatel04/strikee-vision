@@ -313,7 +313,15 @@
     <span class="grow"></span>
     <span class="chip" id="syncBadge"></span>
     <button id="renameBtn" title="Rename this venue">Rename</button>
+    <!-- Delete is deliberately not in the UI. It is irreversible and one
+         mis-click from the header would take the venue, every zone drawn for
+         it, and all recorded history. The route still exists for when it is
+         genuinely wanted:
+             curl -X DELETE http://127.0.0.1:8760/api/venues/<id>
+         which reports what it removed. Re-enable by restoring this button and
+         the handler below.
     <button id="deleteBtn" class="danger" title="Delete this venue and all its data">Delete</button>
+    -->
   </header>
 
   <div id="faults"></div>
@@ -779,19 +787,8 @@ async function init() {
     location.reload();
   };
 
-  document.getElementById('deleteBtn').onclick = async () => {
-    const info = await (await fetch(`/api/venues/${currentVenue}/contents`)).json();
-    const c = info.counts;
-    if (!confirm([`Delete "${info.venue.name}" and everything it holds?`, '',
-      `  ${c.assets} table(s)/station(s)`, `  ${c.video_sources} camera(s)`,
-      `  ${c.sessions} session(s)`, `  ${c.events} event(s)`,
-      `  ${c.snapshots} evidence snapshot(s)`, '',
-      'This cannot be undone.'].join('\n'))) return;
-    if (!confirm(`Really delete "${info.venue.name}"? Last chance.`)) return;
-    const r = await fetch(`/api/venues/${currentVenue}`, { method: 'DELETE' });
-    if (!r.ok) { alert('Delete failed: ' + (await r.text())); return; }
-    location.reload();
-  };
+  /* Delete handler removed with its button - see the comment in the header.
+     The API route is unchanged, so nothing is lost except the mis-click. */
 
   const diag = document.getElementById('diag');
   diag.addEventListener('toggle', () => { if (diag.open) loadDiagnostics(); });

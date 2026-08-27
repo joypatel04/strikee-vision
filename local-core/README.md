@@ -255,6 +255,7 @@ deletes your database backups along with old snapshots.
 | `python tools/survey_cameras.py --url "...{ch}..." --channels 1-12 [--sweep]` | Look at every channel and report what the models see. Run before drawing zones. |
 | `python tools/turso_check.py <url> <token>` | Prove a Turso database is reachable, writable, and which sync mode to use. |
 | `python tools/restore.py [--list \| --verify \| --yes]` | List, verify or restore a database backup. |
+| `python tools/debug_frame.py --venue "..." [--source "..."]` | Render one live frame per camera with its zones, detections and each sensor's verdict. The tool for "why will this asset not go occupied". |
 | `python tools/rename_cameras.py [--auto]` | List cameras and what each watches; rename them from the channel in their URL. |
 | `python tools/fresh_start.py [--yes]` | Wipe local database, snapshots and debug logs for a clean setup. |
 | `strikee-backup` | Run one backup now. |
@@ -320,6 +321,23 @@ unplugged dongle teaches people to ignore alarms.
 (`env file` versus `default`), the installed library versions, model files, live
 per-camera capture health, and the grace window each asset actually ended up
 with.
+
+### When an asset will not go occupied
+
+Four different causes look identical from the dashboard: the person is not
+detected; they are detected but their point falls outside the zone; the zone is
+on the wrong camera; or a `screen` sensor is holding the asset shut because the
+TV reads as off. `tools/debug_frame.py` renders all four onto one image using
+the same detectors and observers the pipeline uses, and prints a verdict per
+sensor:
+
+```
+IN USE  RED   occupancy   1 in zone
+closed  RED   screen      lum=25.0 (on at >= 90)
+```
+
+That pair says the person is seen and inside the zone, and the screen gate is
+what is closing the station - so the fix is `STRIKEE_SCREEN_LUM`, not the zone.
 
 ### Judging whether it is right
 
