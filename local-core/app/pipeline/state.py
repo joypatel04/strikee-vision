@@ -34,6 +34,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _shift(iso: str, seconds: float) -> str:
+    """`iso` moved back by `seconds`. Returns it unchanged if unparseable, so a
+    clock injected by a test can never break state derivation."""
+    if not seconds:
+        return iso
+    try:
+        from datetime import timedelta
+        return (datetime.fromisoformat(iso)
+                - timedelta(seconds=seconds)).isoformat(timespec="seconds")
+    except (ValueError, TypeError):
+        return iso
+
+
 @dataclass
 class _AssetState:
     presence: str = PRESENCE_UNKNOWN
@@ -45,6 +58,7 @@ class _AssetState:
     present_streak: int = 0
     absent_streak: int = 0
     activity_still: int = 0
+    presence_since: str = ""     # when presence ACTUALLY changed, best estimate
 
 
 class StateEngine:
@@ -74,6 +88,7 @@ class StateEngine:
             presence=st.presence, activity=st.activity, health=st.health,
             label=st.label, confidence=st.confidence,
             effective_at=st.effective_at or self._clock(),
+            presence_since=st.presence_since or None,
         )
 
     def update(
@@ -107,6 +122,12 @@ class StateEngine:
             st.present_streak = st.absent_streak = 0
             st.confidence = 0.0
         else:
+            interval = None
+            if self.interval_for is not None:
+                try:
+                    interval = self.interval_for(asset)
+                except Exception:
+                    interval = None
             raw_present, conf = self._fuse_presence(occ_sensors, raw_by_sensor, source_ok)
             if screen_sensors and raw_present:
                 screen_on = any(
@@ -115,7 +136,7 @@ class StateEngine:
                     if source_ok.get(s.source_id, False))
                 if not screen_on:
                     raw_present = False
-            self._smooth_presence(st, raw_present, enter_ticks, exit_ticks)
+            self._smooth_presence(st, raw_present, enter_ticks, exit_ticks, interval)
             st.confidence = conf
 
         # --- activity facet: movement-based (D-T4) ---
@@ -215,7 +236,21 @@ class StateEngine:
         return present, conf
 
     def _smooth_presence(self, st: _AssetState, raw_present: bool,
-                         enter_ticks: int, exit_ticks: int) -> None:
+                         enter_ticks: int, exit_ticks: int,
+                         interval: float | None = None) -> None:
+        """Smooth the raw reads, and record when presence *really* changed.
+
+        The flip happens only once the whole window has elapsed, so stamping a
+        session with the flip time runs both ends late - and by different
+        amounts, since entering takes a couple of reads and leaving takes the
+        full grace window. The net effect is every session recorded roughly the
+        exit window longer than it was, which on a venue billing by time is not
+        a rounding error.
+
+        The reads themselves say when it changed: presence began at the FIRST
+        present read of the streak, and ended at the LAST present read before
+        the absent streak. Both are a known number of intervals ago.
+        """
         if raw_present:
             st.present_streak += 1
             st.absent_streak = 0
@@ -223,10 +258,15 @@ class StateEngine:
             st.absent_streak += 1
             st.present_streak = 0
 
+        now = self._clock()
         if st.presence != PRESENCE_PRESENT and st.present_streak >= enter_ticks:
             st.presence = PRESENCE_PRESENT
+            # they arrived at the first read of this streak
+            st.presence_since = _shift(now, (enter_ticks - 1) * (interval or 0))
         elif st.presence != PRESENCE_ABSENT and st.absent_streak >= exit_ticks:
             st.presence = PRESENCE_ABSENT
+            # they left just after the last present read, exit_ticks reads ago
+            st.presence_since = _shift(now, exit_ticks * (interval or 0))
         elif st.presence == PRESENCE_UNKNOWN:
             # before either threshold is met, remain unknown
             pass

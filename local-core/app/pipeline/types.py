@@ -84,7 +84,8 @@ class AssetSnapshot:
     health: str
     label: str
     confidence: float
-    effective_at: str
+    effective_at: str          # when the LABEL changed (audit trail)
+    presence_since: Optional[str] = None   # when presence really changed (billing)
 
     def to_dict(self) -> dict:
         return {

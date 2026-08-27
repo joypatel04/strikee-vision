@@ -79,7 +79,11 @@ class DbStateSink:
                     snapshot = self._capture_snapshot(venue_id, s)
                     session = self.sessions.open(
                         venue_id, s.asset_id, s.business_unit_id,
-                        start_ts=s.effective_at, confidence=s.confidence,
+                        # presence_since, not effective_at: the flip happens
+                        # after the smoothing window, so effective_at is late at
+                        # both ends and inflates every duration.
+                        start_ts=s.presence_since or s.effective_at,
+                        confidence=s.confidence,
                         start_event_id=evt["id"], start_snapshot=snapshot,
                     )
                     self.events.append({
@@ -92,7 +96,8 @@ class DbStateSink:
             if s.presence == PRESENCE_ABSENT:
                 open_session = self.sessions.get_open_for_asset(s.asset_id)
                 if open_session is not None:
-                    self.sessions.close(open_session["id"], end_ts=s.effective_at,
+                    self.sessions.close(open_session["id"],
+                                        end_ts=s.presence_since or s.effective_at,
                                         end_event_id=evt["id"])
                     self.events.append({
                         "venue_id": venue_id, "asset_id": s.asset_id,
