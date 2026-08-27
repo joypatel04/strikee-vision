@@ -255,6 +255,7 @@ deletes your database backups along with old snapshots.
 | `python tools/survey_cameras.py --url "...{ch}..." --channels 1-12 [--sweep]` | Look at every channel and report what the models see. Run before drawing zones. |
 | `python tools/turso_check.py <url> <token>` | Prove a Turso database is reachable, writable, and which sync mode to use. |
 | `python tools/restore.py [--list \| --verify \| --yes]` | List, verify or restore a database backup. |
+| `python tools/show_config.py [--venue "..."]` | The whole configuration as a tree - assets, their sensors, cameras - plus the exact redraw command for each. Start here before changing anything. |
 | `python tools/debug_frame.py --venue "..." [--source "..."]` | Render one live frame per camera with its zones, detections and each sensor's verdict. The tool for "why will this asset not go occupied". |
 | `python tools/rename_cameras.py [--auto]` | List cameras and what each watches; rename them from the channel in their URL. |
 | `python tools/fresh_start.py [--yes]` | Wipe local database, snapshots and debug logs for a clean setup. |

@@ -196,6 +196,12 @@ def draw_zones(frame, max_w: int = 1280, max_h: int = 720,
     return zones
 
 
+def _mask_uri(uri: str) -> str:
+    """Never print the DVR password - this output gets screenshotted."""
+    import re
+    return re.sub(r"//([^:/@]+):([^@]+)@", r"//\1:***@", uri or "")
+
+
 def _overlapping_pairs(zones: list[dict]) -> list[tuple[str, str]]:
     """Zones that share space, which on a wide camera is easy to do by accident.
 
@@ -223,6 +229,27 @@ def _find(repo, cur, **match):
         if all(row.get(k) == v for k, v in match.items()):
             return row
     return None
+
+
+def source_uri_by_name(db_path, venue_name, source_name):
+    """The RTSP url of a configured camera, so a command need not carry it.
+
+    Putting the url on the command line means putting the DVR password into
+    shell history, into any screenshot of the terminal, and over anyone's
+    shoulder. For a camera that already exists, its name is enough.
+    """
+    repos = {s.name: Repository(s) for s in REGISTRY}
+    db = Database(db_path)
+    try:
+        with db.cursor() as cur:
+            venue = _find(repos["venue"], cur, name=venue_name)
+            if venue is None:
+                return None
+            src = _find(repos["video_source"], cur,
+                        venue_id=venue["id"], name=source_name)
+            return src["uri"] if src else None
+    finally:
+        db.close()
 
 
 def existing_zones(db_path, venue_name, source_uri, mode=None) -> list[dict]:
@@ -409,7 +436,9 @@ def write_config(db_path, source, venue_name, source_name, bu_name,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", required=True, help="RTSP url, file path, or webcam index")
+    ap.add_argument("--source", help="RTSP url, file path, or webcam index. Not "
+                                     "needed with --redraw if --source-name names "
+                                     "a camera that already exists.")
     ap.add_argument("--venue", default="Strikee Club")
     ap.add_argument("--source-name", default="Camera 1")
     ap.add_argument("--business-unit", default="Snooker")
@@ -445,7 +474,19 @@ def main():
                          "1280x720). Zones are always saved at full resolution.")
     args = ap.parse_args()
 
-    print(f"Grabbing a frame from {args.source} ...")
+    if not args.source:
+        # Redrawing an existing camera: look its url up rather than making
+        # someone paste a password into their shell history.
+        looked_up = source_uri_by_name(args.db, args.venue, args.source_name)
+        if looked_up is None:
+            print(f"No camera named {args.source_name!r} in {args.venue!r}. "
+                  f"Pass --source with its url, or check "
+                  f"tools/show_config.py for the names.")
+            sys.exit(2)
+        args.source = looked_up
+        print(f"Using the configured camera {args.source_name!r}.")
+
+    print(f"Grabbing a frame from {_mask_uri(args.source)} ...")
     frame = grab_frame(args.source)
     h, w = frame.shape[:2]
     print(f"Got a {w}x{h} frame. Opening the zone editor...")
