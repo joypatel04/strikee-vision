@@ -76,18 +76,18 @@ def _check_model(model: str) -> bool:
         return False
 
 
-def _check_rtsp(uri: str) -> bool:
+def _check_rtsp(uri: str, label: str = "DVR/RTSP") -> bool:
     try:
         from .pipeline.capture import grab_once
         ok, frame = grab_once(uri)
         if ok and frame is not None:
             h, w = frame.shape[:2]
-            print(f"{OK} DVR/RTSP grabbed a {w}x{h} frame (HEVC decode + network OK)")
+            print(f"{OK} {label}: grabbed a {w}x{h} frame (HEVC decode + network OK)")
             return True
-        print(f"{FAIL} DVR/RTSP: opened but no frame — check URL/credentials/codec")
+        print(f"{FAIL} {label}: opened but no frame — check URL/credentials/codec")
         return False
     except Exception as exc:
-        print(f"{FAIL} DVR/RTSP grab failed: {exc}")
+        print(f"{FAIL} {label}: grab failed: {exc}")
         return False
 
 
@@ -178,18 +178,102 @@ def _check_turso() -> bool:
         return False
 
 
-def run(model: str = "best.pt", rtsp: str | None = None) -> int:
+def _check_env_file() -> bool:
+    """Say where settings came from. On Windows `set` dies with its window, so a
+    box can look configured and be running entirely on defaults."""
+    from . import platform_env
+    if platform_env.ENV_FILE_PATH:
+        print(f"{OK} settings: {len(platform_env.ENV_FILE_KEYS)} from "
+              f"{platform_env.ENV_FILE_PATH}")
+    else:
+        print(f"{WARN} no .env found - everything is running on defaults or on "
+              f"variables set in THIS window only")
+    return True
+
+
+def _check_disk(path: str = ".") -> bool:
+    """Snapshots are written continuously; a full disk stops tracking."""
+    import shutil
+    try:
+        free_gb = shutil.disk_usage(path).free / 1e9
+    except Exception as exc:
+        print(f"{WARN} could not read free disk space: {exc}")
+        return True
+    if free_gb < 1:
+        print(f"{FAIL} only {free_gb:.1f} GB free - snapshots will fill this shortly")
+        return False
+    note = "" if free_gb > 5 else "  (getting low)"
+    print(f"{OK} disk: {free_gb:.1f} GB free{note}")
+    return True
+
+
+def _check_object_storage() -> bool:
+    """Round-trip a tiny object through each configured bucket.
+
+    Uploads are best-effort by design - a failed snapshot upload must never
+    stall the pipeline - which also means bad credentials fail silently forever.
+    The only honest test is to actually write, read and delete something.
+    """
+    import os
+
+    targets = []
+    if os.environ.get("STRIKEE_S3_BUCKET"):
+        from .snapshots import SnapshotStore
+        st = SnapshotStore(os.environ.get("STRIKEE_SNAPSHOT_DIR", "snapshots"))
+        targets.append(("snapshots", st.s3_bucket, "_doctor/", st._client))
+    if os.environ.get("STRIKEE_BACKUP_BUCKET"):
+        from .backup import BackupConfig, _client as backup_client
+        cfg = BackupConfig.from_env()
+        targets.append(("db backup", cfg.bucket, f"{cfg.prefix}/_doctor/",
+                        lambda: backup_client(cfg)))
+
+    if not targets:
+        print(f"{WARN} skipped object storage (no STRIKEE_S3_BUCKET / "
+              f"STRIKEE_BACKUP_BUCKET set)")
+        return True
+
+    ok = True
+    for label, bucket, prefix, make_client in targets:
+        key = f"{prefix}write-test.txt"
+        try:
+            client = make_client()
+            client.put_object(Bucket=bucket, Key=key, Body=b"strikee-doctor")
+            body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+            client.delete_object(Bucket=bucket, Key=key)
+            if body != b"strikee-doctor":
+                raise RuntimeError("read back the wrong content")
+            print(f"{OK} {label}: wrote, read and deleted s3://{bucket}/{key}")
+        except Exception as exc:
+            ok = False
+            print(f"{FAIL} {label}: cannot write to {bucket}: "
+                  f"{type(exc).__name__}: {str(exc)[:120]}")
+            print(f"       Check the bucket name, the region, and that the key "
+                  f"has s3:PutObject/GetObject/DeleteObject on it.")
+    return ok
+
+
+def run(model: str = "best.pt", rtsp: str | None = None,
+        channels: list | None = None) -> int:
     harden()
     print("Strikee Vision — self check\n" + "-" * 40)
     results = [
+        _check_env_file(),
         _check_python(),
         _check_torch(),
         _check_cv2(),
         _check_model(model),
+        _check_disk(),
         _check_turso(),
+        _check_object_storage(),
     ]
     if rtsp:
-        results.append(_check_rtsp(rtsp))
+        # A template with {ch} tests every channel you will actually use, which
+        # is the difference between "a camera works" and "my cameras work".
+        if "{ch}" in rtsp:
+            for ch in channels or [1]:
+                results.append(_check_rtsp(rtsp.replace("{ch}", str(ch)), label=f"ch{ch}"))
+        else:
+            results.append(_check_rtsp(rtsp))
     else:
         print(f"{WARN} skipped DVR/RTSP check (pass --rtsp <url> to test the camera)")
     print("-" * 40)
@@ -202,9 +286,16 @@ def run(model: str = "best.pt", rtsp: str | None = None) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Strikee Vision bring-up self-check")
     ap.add_argument("--model", default="best.pt", help="path to the snooker model")
-    ap.add_argument("--rtsp", default=None, help="optional DVR/RTSP url to test")
+    ap.add_argument("--rtsp", default=None,
+                    help="DVR/RTSP url to test. May contain {ch}, in which case "
+                         "--channels decides which channels are tried")
+    ap.add_argument("--channels", default=None,
+                    help="channels to test with a {ch} url, e.g. 1,4,6")
     args = ap.parse_args()
-    sys.exit(run(model=args.model, rtsp=args.rtsp))
+    chans = None
+    if args.channels:
+        chans = [int(c) for c in args.channels.replace(" ", "").split(",") if c]
+    sys.exit(run(model=args.model, rtsp=args.rtsp, channels=chans))
 
 
 if __name__ == "__main__":
