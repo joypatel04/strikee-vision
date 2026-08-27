@@ -161,6 +161,26 @@ def draw_zones(frame, max_w: int = 1280, max_h: int = 720,
     return zones
 
 
+def _overlapping_pairs(zones: list[dict]) -> list[tuple[str, str]]:
+    """Zones that share space, which on a wide camera is easy to do by accident.
+
+    A person is placed at one point, so if that point falls inside two station
+    polygons BOTH stations read occupied - one customer, two billed sessions,
+    and nothing on screen explains it. Checked by vertex containment both ways,
+    which catches every overlap a hand-drawn room zone realistically produces.
+    """
+    from app.pipeline.geometry import point_in_polygon
+
+    out = []
+    for i, a in enumerate(zones):
+        for b in zones[i + 1:]:
+            pa, pb = a["polygon"], b["polygon"]
+            if any(point_in_polygon(pt, pb) for pt in pa) or \
+               any(point_in_polygon(pt, pa) for pt in pb):
+                out.append((a["name"], b["name"]))
+    return out
+
+
 def _find(repo, cur, **match):
     """First row whose fields all equal `match`, else None. The config tables hold
     a handful of rows, so scanning them is cheaper than adding query plumbing."""
@@ -295,9 +315,11 @@ def main():
         # People are located by their FEET (the bottom edge of the detection
         # box), so a zone drawn tightly around a seat or a screen misses a
         # player whose feet fall outside it.
-        print("Mode: occupancy — draw the zone around where a PERSON is, "
-              "including the floor at their feet (people are placed by their "
-              "feet, not their head).")
+        print("Mode: occupancy — a person is placed at the BOTTOM-CENTRE of their "
+              "box, so cover where that lands: for someone standing that is the "
+              "floor at their feet; for someone SEATED it is the seat or their "
+              "legs, not the floor in front. Include the whole seating area, and "
+              "keep neighbouring stations from overlapping.")
 
     try:
         max_w, max_h = (int(v) for v in args.max_window.lower().split("x"))
@@ -315,6 +337,11 @@ def main():
     zones = draw_zones(frame, max_w=max_w, max_h=max_h, aspect=aspect)
     if not zones:
         print("No zones drawn — nothing written."); return
+
+    for a, b in _overlapping_pairs(zones):
+        print(f"  WARNING: '{a}' and '{b}' overlap. A person standing in the shared "
+              f"area will mark BOTH occupied, so one customer becomes two sessions. "
+              f"Re-run and keep them apart if that area is reachable.")
 
     venue_id = write_config(args.db, args.source, args.venue, args.source_name,
                             args.business_unit, args.asset_type, zones, mode=args.mode)
