@@ -138,3 +138,17 @@ def test_a_station_without_a_screen_sensor_is_unaffected():
     engine = StateEngine(enter_ticks=2, exit_ticks=3)
     snap = _drive(engine, _station(with_screen=False), person=True, screen=False)
     assert snap.presence == "present"
+
+
+def test_thresholds_fall_back_to_environment(monkeypatch):
+    """Documented in .env.example, so they have to actually be read."""
+    monkeypatch.setenv("STRIKEE_SCREEN_LUM", "50")
+    assert observe_screen(_frame(60), FakeSensor(ZONE))["present"] is True
+    monkeypatch.setenv("STRIKEE_SCREEN_LUM", "200")
+    assert observe_screen(_frame(60), FakeSensor(ZONE))["present"] is False
+
+
+def test_per_sensor_params_beat_the_environment(monkeypatch):
+    """One awkward TV must be tunable without moving the venue-wide default."""
+    monkeypatch.setenv("STRIKEE_SCREEN_LUM", "200")
+    assert observe_screen(_frame(60), FakeSensor(ZONE, screen_lum=50))["present"] is True

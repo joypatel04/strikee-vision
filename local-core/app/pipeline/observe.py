@@ -99,9 +99,14 @@ def observe_screen(frame, sensor, previous=None) -> dict:
     if previous is not None and getattr(previous, "shape", None) == grey.shape:
         change = float(np.abs(grey.astype("float32") - previous.astype("float32")).mean())
 
+    # Per-sensor params win, so one awkward TV can be tuned on its own; the env
+    # vars are the venue-wide default.
+    import os
     params = getattr(sensor, "params", None) or {}
-    lum_on = float(params.get("screen_lum", 90.0))
-    change_on = float(params.get("screen_change", 6.0))
+    lum_on = float(params.get("screen_lum",
+                              os.environ.get("STRIKEE_SCREEN_LUM", 90.0)))
+    change_on = float(params.get("screen_change",
+                                 os.environ.get("STRIKEE_SCREEN_CHANGE", 6.0)))
 
     on = luminance >= lum_on or change >= change_on
     # Confidence rises with whichever signal is carrying the decision, so a

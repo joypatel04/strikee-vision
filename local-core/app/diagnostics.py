@@ -55,6 +55,10 @@ _KNOBS: list[tuple[str, Optional[str], Callable[[str], Any], str, str]] = [
      "Still reads before Active drops to Idle."),
     ("STRIKEE_MOTION_THRESHOLD", "8.0", float, "state",
      "Pixel movement that counts as play."),
+    ("STRIKEE_SCREEN_LUM", "90", float, "state",
+     "Brightness in a screen zone that counts as the TV being on."),
+    ("STRIKEE_SCREEN_CHANGE", "6", float, "state",
+     "Frame-to-frame change in a screen zone that counts as the TV being on."),
     # snooker
     ("STRIKEE_RACK_REDS", "8", int, "snooker",
      "Reds that constitute a fresh rack."),
