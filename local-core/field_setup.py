@@ -66,7 +66,8 @@ def grab_frame(source: str):
     return frame
 
 
-def draw_zones(frame, max_w: int = 1280, max_h: int = 720) -> list[dict]:
+def draw_zones(frame, max_w: int = 1280, max_h: int = 720,
+               aspect: float | None = None) -> list[dict]:
     """Interactive polygon drawing. Returns [{name, polygon}, ...].
 
     The DVR's main stream is 960x1080 - taller than most screens once the title
@@ -84,17 +85,29 @@ def draw_zones(frame, max_w: int = 1280, max_h: int = 720) -> list[dict]:
     window = "Draw a zone per table — click, 'n' name, 'u' undo, 's' save, 'q' quit"
 
     h, w = frame.shape[:2]
-    scale = min(1.0, max_w / w, max_h / h)
-    display = (frame if scale == 1.0
-               else cv2.resize(frame, (int(w * scale), int(h * scale)),
-                               interpolation=cv2.INTER_AREA))
-    if scale < 1.0:
-        print(f"  window scaled to {int(w*scale)}x{int(h*scale)} "
-              f"({scale*100:.0f}%) to fit your screen - zones are still saved at "
-              f"full {w}x{h} resolution")
+
+    # Some DVR channels deliver an anamorphic frame - the picture is square but
+    # the room is not, which is why it looks wrong here and right in DMSS. Draw
+    # on a squeezed image and every polygon is guesswork, so unsqueeze for
+    # DISPLAY and convert clicks back. Zones stay in native frame coordinates,
+    # which is what the pipeline applies them to.
+    unsqueezed_w = int(round(h * aspect)) if aspect else w
+    fit = min(1.0, max_w / unsqueezed_w, max_h / h)
+    disp_w, disp_h = max(1, int(unsqueezed_w * fit)), max(1, int(h * fit))
+    display = (frame if (disp_w, disp_h) == (w, h)
+               else cv2.resize(frame, (disp_w, disp_h), interpolation=cv2.INTER_AREA))
+
+    sx, sy = disp_w / float(w), disp_h / float(h)
+    if aspect:
+        print(f"  unsqueezed for drawing: {w}x{h} shown as {disp_w}x{disp_h} "
+              f"(aspect {aspect:.2f}) - zones are still saved against the real "
+              f"{w}x{h} frame")
+    elif (disp_w, disp_h) != (w, h):
+        print(f"  window scaled to {disp_w}x{disp_h} to fit your screen - zones "
+              f"are still saved at full {w}x{h} resolution")
 
     def to_disp(p):
-        return (int(round(p[0] * scale)), int(round(p[1] * scale)))
+        return (int(round(p[0] * sx)), int(round(p[1] * sy)))
 
     def redraw():
         canvas = display.copy()
@@ -113,8 +126,8 @@ def draw_zones(frame, max_w: int = 1280, max_h: int = 720) -> list[dict]:
     def on_mouse(event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
             # back to original-frame coordinates, clamped inside the image
-            ox = min(w - 1, max(0, int(round(x / scale))))
-            oy = min(h - 1, max(0, int(round(y / scale))))
+            ox = min(w - 1, max(0, int(round(x / sx))))
+            oy = min(h - 1, max(0, int(round(y / sy))))
             points.append([ox, oy])
             redraw()
 
@@ -227,6 +240,10 @@ def main():
                     choices=["snooker_game", "occupancy"],
                     help="sensor mode: snooker_game (balls, for tables) or occupancy (people)")
     ap.add_argument("--db", default=os.environ.get("STRIKEE_DB", "strikee.db"))
+    ap.add_argument("--aspect", default=os.environ.get("STRIKEE_PERSON_ASPECT"),
+                    help="true scene aspect (e.g. 16:9) for channels that deliver "
+                         "a squeezed frame - the editor unsqueezes it for drawing "
+                         "while still saving zones against the real frame")
     ap.add_argument("--max-window", default="1280x720",
                     help="largest on-screen size for the editor, WxH (default "
                          "1280x720). Zones are always saved at full resolution.")
@@ -252,7 +269,15 @@ def main():
     except ValueError:
         print(f"--max-window must look like 1280x720, got {args.max_window!r}")
         sys.exit(2)
-    zones = draw_zones(frame, max_w=max_w, max_h=max_h)
+    aspect = None
+    if args.aspect:
+        try:
+            aspect = (float(args.aspect.split(":")[0]) / float(args.aspect.split(":")[1])
+                      if ":" in args.aspect else float(args.aspect))
+        except (ValueError, ZeroDivisionError):
+            print(f"--aspect must look like 16:9 or 1.78, got {args.aspect!r}")
+            sys.exit(2)
+    zones = draw_zones(frame, max_w=max_w, max_h=max_h, aspect=aspect)
     if not zones:
         print("No zones drawn — nothing written."); return
 

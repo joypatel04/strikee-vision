@@ -176,6 +176,12 @@ def main() -> int:
         cv2.rectangle(canvas, (0, 0), (canvas.shape[1], 30), (0, 0, 0), -1)
         cv2.putText(canvas, caption, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                     (255, 255, 255), 2)
+        if aspect:
+            # Save it the shape the room actually is. Detection already ran on an
+            # unsqueezed copy; this is so the picture you inspect matches what
+            # DMSS shows you, rather than the squeezed frame off the wire.
+            canvas = cv2.resize(canvas, (int(round(h * aspect)), h),
+                                interpolation=cv2.INTER_LINEAR)
         path = out_dir / f"ch{ch:02d}.jpg"
         cv2.imwrite(str(path), canvas, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
