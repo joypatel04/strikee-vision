@@ -127,6 +127,7 @@ STRIKEE_MAX_STREAMS=2
 STRIKEE_EXIT_SEC=120
 STRIKEE_DEBUG=1
 
+STRIKEE_SYNC_MODE=push
 TURSO_DATABASE_URL=libsql://your-db-org.turso.io
 TURSO_AUTH_TOKEN=ey...
 STRIKEE_TURSO_SYNC_SEC=15
@@ -147,9 +148,13 @@ the only thing that works for an unattended box.
 .venv\Scripts\python.exe tools\turso_check.py libsql://your-db-org.turso.io <token>
 ```
 
-`HTTP 200` plus a sync endpoint that answers. A 404 means no database at that
-hostname (`nslookup` proves nothing — `*.turso.io` is wildcard DNS). A 401 means
-the token belongs to a different database.
+Wait for `[ok] create + insert + select + drop` — push sync creates its tables
+and upserts rows, so read access is not enough. The tool then prints which
+`STRIKEE_SYNC_MODE` to use.
+
+A 404 at step 1 means no database at that hostname (`nslookup` proves nothing —
+`*.turso.io` is wildcard DNS). A 401 means the token belongs to a different
+database. Missing `/v1` endpoints is **not** a failure: it just means `push`.
 
 ---
 
@@ -211,31 +216,64 @@ Known from the July survey: **channels 1, 4, 6** are the trained top-down table
 angle (ch6 sees two tables); **2, 3, 5** are the opposite end and detect badly;
 **7-8** are the passage and entrance. Confirm the gaming channels here.
 
-## 7. Zones
+## 7. Zones — one venue, two business units
 
-Once per channel, **same `--venue` every time** — that is what keeps them in one
-venue:
+Snooker and the gaming lounge belong in **one venue**, as two **business
+units**. Not two venues: the stream budget is process-wide but analytics, the
+games log and the reconciliation app are all per venue, so splitting them means
+joining the club back together by hand afterwards. Business Unit is already the
+analytics dimension.
+
+What keeps them together is passing the **same `--venue` every single time**.
+Runs after the first must print `reusing existing venue 'Strikee Club'` — if one
+does not, stop, because you have just made a second venue.
+
+**Snooker tables** — channels 1, 4 and 6:
 
 ```powershell
-.venv\Scripts\python.exe field_setup.py --source "rtsp://USER:PASS@192.168.0.108:554/cam/realmonitor?channel=1&subtype=0" --venue "Strikee Club" --source-name "Channel 1"
+.venv\Scripts\python.exe field_setup.py --source "rtsp://USER:PASS@192.168.0.108:554/cam/realmonitor?channel=1&subtype=0" --venue "Strikee Club" --business-unit "Snooker" --asset-type "Snooker Table" --mode snooker_game --source-name "Channel 1"
 ```
 
-Then `channel=4`, then `channel=6`.
+Repeat with `channel=4`, then `channel=6`. **Channel 6 gets TWO polygons** —
+table 3 and table 4. Draw around the **table surface**, the green felt where the
+balls are.
 
-**Drawing:** click the corners of the table surface — the green felt, not where
-people stand → click the image window → press **`n`** → **switch to PowerShell
-and type the name**, press Enter (the window freezes until you do; that is the
-prompt waiting) → repeat → press **`s`** when every polygon is green and no
-yellow dots remain. **`q` discards everything.**
+**Gaming stations** — whichever channels the survey proved:
 
-- **Channel 6 gets TWO polygons** — table 3 and table 4.
-- Skip channels 2, 3 and 5 — wrong angle, the model was never trained on it.
-- Runs 2 and 3 must print `reusing existing venue 'Strikee Club'`.
+```powershell
+.venv\Scripts\python.exe field_setup.py --source "rtsp://USER:PASS@192.168.0.108:554/cam/realmonitor?channel=9&subtype=0" --venue "Strikee Club" --business-unit "Gaming Lounge" --asset-type "Gaming Station" --mode occupancy --source-name "Gaming Camera A"
+```
 
-For the gaming lounge later, same command with `--business-unit "Gaming Lounge"
---asset-type "Gaming Station" --mode occupancy`, and the same `--venue`.
+One polygon per station, and a camera covering two stations gets two. Draw
+around **where a person is, including the floor at their feet** — people are
+located by the bottom of their box, so a zone hugging a seat or a screen misses
+someone standing beside it.
 
----
+**Do one station first and run it** before drawing the rest. If that one does
+not go Occupied when somebody sits there, five more zones will not either.
+
+| | Snooker | Gaming Lounge |
+|---|---|---|
+| `--mode` | `snooker_game` | `occupancy` |
+| `--business-unit` | `Snooker` | `Gaming Lounge` |
+| `--asset-type` | `Snooker Table` | `Gaming Station` |
+| Model used | `best.pt` | `yolo11n.pt` |
+| Sampled every | 13s (`STRIKEE_RATE_TABLE`) | 5s (`STRIKEE_RATE_GAMING`) |
+| Produces | sessions **and** games | sessions only |
+| Draw around | the table surface | the person and their feet |
+
+Gaming stations get occupancy sessions but **no game counting** — correct, there
+are no racks. `best.pt` is never loaded for them.
+
+**Drawing, either mode:** click the corners → click the image window → press
+**`n`** → **switch to PowerShell and type the name**, Enter (the window freezes
+until you do — that is the prompt waiting) → repeat for other assets in the same
+view → press **`s`** when everything is green with no yellow dots left. **`q`
+discards everything.**
+
+Because the two are sampled at different rates, set the grace window in
+**seconds** (`STRIKEE_EXIT_SEC`), never ticks — a tick count means 39s on a
+table and 15s on a station.
 
 ## 8. Run it
 
