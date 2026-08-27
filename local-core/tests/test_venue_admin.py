@@ -199,14 +199,20 @@ def test_rename_route(client):
 # ----------------------------------------------------------------- dashboard
 
 
-def test_dashboard_exposes_the_admin_controls(client):
-    """The routes are useless if the page can't reach them, and index.html is
-    served as a file - a broken edit there is invisible to every other test."""
+def test_dashboard_exposes_rename(client):
+    """The route is useless if the page can't reach it, and index.html is served
+    as a file - a broken edit there is invisible to every other test."""
     body = client.get("/").text
     assert 'id="renameBtn"' in body
-    assert 'id="deleteBtn"' in body
     assert "/rename" in body
-    assert "/contents" in body, "delete should confirm using the contents route"
+
+
+def test_dashboard_does_not_expose_delete(client):
+    """Deliberately removed: irreversible, and one mis-click from the header
+    would take the venue, its zones and all history. The route stays for
+    intentional use; see test_delete_route_reports_what_it_removed."""
+    body = client.get("/").text
+    assert "method: 'DELETE'" not in body
 
 
 def test_dashboard_html_is_utf8_decodable(client):
