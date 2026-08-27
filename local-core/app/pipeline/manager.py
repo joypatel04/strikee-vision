@@ -131,8 +131,28 @@ class RuntimeManager:
         # when #cameras <= the DVR's concurrent limit).
         scheduled = os.environ.get("STRIKEE_SCHEDULER", "1") != "0"
 
+        def _aspect():
+            raw = os.environ.get("STRIKEE_PERSON_ASPECT")
+            if not raw:
+                return None
+            try:                      # "16:9" or "1.78"
+                if ":" in raw:
+                    w, h = raw.split(":", 1)
+                    return float(w) / float(h)
+                return float(raw)
+            except (ValueError, ZeroDivisionError):
+                return None
+
+        person_conf = float(os.environ.get("STRIKEE_PERSON_CONF", "0.25"))
+        person_imgsz = int(os.environ.get("STRIKEE_PERSON_IMGSZ", "0")) or None
+        person_clahe = bool(os.environ.get("STRIKEE_PERSON_CLAHE"))
+        person_aspect = _aspect()
+
         def _build():
-            person = YOLODetector(person_model) if (kinds & PERSON_KINDS) else None
+            person = (YOLODetector(person_model, conf=person_conf,
+                                   imgsz=person_imgsz, clahe=person_clahe,
+                                   aspect=person_aspect)
+                      if (kinds & PERSON_KINDS) else None)
             snooker = SnookerDetector(snooker_model) if (SNOOKER_KIND in kinds) else None
             factory = None if scheduled else (lambda s: OpenCVFrameSource(s.id, s.uri))
             return build_live_runtime(

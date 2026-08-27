@@ -45,6 +45,36 @@ def parse_channels(spec: str) -> list[int]:
     return out
 
 
+def _sweep(frame, args):
+    """Try a handful of settings on one frame and keep whichever found most.
+
+    Worth doing once per difficult camera: the difference between zero and a
+    working detection is usually one of these, and which one is not guessable
+    from looking at the picture.
+    """
+    from app.pipeline.perception import YOLODetector
+
+    trials = [
+        ("default", dict(conf=0.25)),
+        ("conf 0.15", dict(conf=0.15)),
+        ("imgsz 960", dict(conf=0.25, imgsz=960)),
+        ("imgsz 1280", dict(conf=0.20, imgsz=1280)),
+        ("clahe", dict(conf=0.20, clahe=True)),
+        ("imgsz 1280 + clahe", dict(conf=0.20, imgsz=1280, clahe=True)),
+        ("aspect 16:9", dict(conf=0.20, aspect=16 / 9)),
+        ("aspect 16:9 + imgsz 1280", dict(conf=0.20, aspect=16 / 9, imgsz=1280)),
+    ]
+    best_label, best_dets = "none", []
+    for label, kwargs in trials:
+        try:
+            dets = YOLODetector(args.person_model, **kwargs).detect(frame)
+        except Exception:
+            continue
+        if len(dets) > len(best_dets):
+            best_label, best_dets = label, dets
+    return (best_label if best_dets else None), best_dets
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -59,6 +89,20 @@ def main() -> int:
                                                               "best.pt"))
     ap.add_argument("--no-snooker", action="store_true",
                     help="skip ball detection (faster; use when surveying people cameras)")
+    ap.add_argument("--conf", type=float, default=0.25,
+                    help="person confidence threshold (default 0.25; try 0.15)")
+    ap.add_argument("--imgsz", type=int, default=None,
+                    help="inference size (default 640). 960 or 1280 finds people "
+                         "far down a room who are only a few dozen pixels tall")
+    ap.add_argument("--clahe", action="store_true",
+                    help="normalise lighting before detection - try this in a dim room")
+    ap.add_argument("--aspect", default=None,
+                    help="true scene aspect, e.g. 16:9, when a channel delivers a "
+                         "squeezed frame. People stop looking like people when the "
+                         "picture is anamorphic")
+    ap.add_argument("--sweep", action="store_true",
+                    help="try several settings on each channel and report which "
+                         "found the most people")
     args = ap.parse_args()
 
     if "{ch}" not in args.url:
@@ -72,8 +116,19 @@ def main() -> int:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    def parse_aspect(raw):
+        if not raw:
+            return None
+        if ":" in raw:
+            w, h = raw.split(":", 1)
+            return float(w) / float(h)
+        return float(raw)
+
+    aspect = parse_aspect(args.aspect)
+
     print("Loading models...")
-    person = YOLODetector(args.person_model, conf=0.25)
+    person = YOLODetector(args.person_model, conf=args.conf, imgsz=args.imgsz,
+                          clahe=args.clahe, aspect=aspect)
     snooker = None if args.no_snooker else SnookerDetector(args.snooker_model, conf=0.20)
 
     channels = parse_channels(args.channels)
@@ -98,7 +153,10 @@ def main() -> int:
             continue
 
         h, w = frame.shape[:2]
-        people = person.detect(frame)
+        if args.sweep:
+            best_label, people = _sweep(frame, args)
+        else:
+            best_label, people = None, person.detect(frame)
         balls = snooker.detect(frame) if snooker is not None else []
         reds = [d for d in balls if d.label == "red_ball"]
 
@@ -111,15 +169,19 @@ def main() -> int:
             x1, y1, x2, y2 = (int(v) for v in d.bbox)
             cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 165, 255), 2)
 
-        caption = f"ch{ch}  {w}x{h}  people={len(people)}  balls={len(balls)} (red={len(reds)})"
+        caption = (f"ch{ch}  {w}x{h}  people={len(people)}  "
+                   f"balls={len(balls)} (red={len(reds)})")
+        if best_label:
+            caption += f"  best: {best_label}"
         cv2.rectangle(canvas, (0, 0), (canvas.shape[1], 30), (0, 0, 0), -1)
         cv2.putText(canvas, caption, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                     (255, 255, 255), 2)
         path = out_dir / f"ch{ch:02d}.jpg"
         cv2.imwrite(str(path), canvas, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
+        extra = f"  best: {best_label}" if best_label else ""
         print(f"  ch{ch:<3} {w}x{h}  people={len(people):<3} balls={len(balls):<3} "
-              f"({elapsed:.1f}s)  -> {path}")
+              f"({elapsed:.1f}s){extra}  -> {path}")
         rows.append((ch, f"{w}x{h}", len(people), len(balls), elapsed, "ok"))
 
     # --- summary ---------------------------------------------------------
@@ -147,7 +209,18 @@ Now OPEN THE IMAGES. The counts alone will mislead you:
   * Balls on a channel you thought was a people camera means you have the
     channel numbers crossed.
 
-Then draw zones only on the channels that actually detected what you need.""")
+Then draw zones only on the channels that actually detected what you need.
+
+If a gaming camera shows people but detects none, try:
+
+    --sweep                     try several settings and report the best
+    --imgsz 1280                people far down a room are tiny at the default 640
+    --clahe                     normalise lighting in a dim lounge
+    --aspect 16:9               unsqueeze an anamorphic channel
+    --person-model yolo11x.pt   a much larger model; slower, far better at angles
+
+Whatever wins, put it in .env as STRIKEE_PERSON_IMGSZ / _CLAHE / _ASPECT /
+_CONF / STRIKEE_PERSON_MODEL and the pipeline will use it.""")
     return 0
 
 

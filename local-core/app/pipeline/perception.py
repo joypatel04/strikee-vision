@@ -10,7 +10,7 @@ Fakes let the whole pipeline run in tests with no model.
 """
 from __future__ import annotations
 
-from typing import Callable, Protocol
+from typing import Callable, Optional, Protocol
 
 from .types import Detection, Frame
 
@@ -64,21 +64,56 @@ def _yolo_class():
 
 class YOLODetector:
     """General YOLO person detector. Lazy import. Model configurable (nano is
-    fast; yolo11x is more accurate for people at difficult angles)."""
+    fast; yolo11x is more accurate for people at difficult angles).
 
-    def __init__(self, model: str = "yolo11n.pt", conf: float = 0.25):
+    Three knobs exist because a camera that a person reads easily can still
+    defeat the model:
+
+      imgsz   Ultralytics letterboxes to 640 by default. People far down a room
+              end up only a few dozen pixels tall and vanish; 960 or 1280 finds
+              them, at a cost in CPU.
+      clahe   The snooker detector normalises lighting and this did not. A dim
+              lounge is exactly where that hurts.
+      aspect  Some DVR channels deliver an anamorphic frame - square pixels
+              assumed, but the real scene is wider. People come out squeezed
+              and stop looking like people. Give the true aspect (e.g. 16/9)
+              and the frame is unsqueezed before inference. Detections are
+              mapped back, so zone coordinates still refer to the real frame.
+    """
+
+    def __init__(self, model: str = "yolo11n.pt", conf: float = 0.25,
+                 imgsz: Optional[int] = None, clahe: bool = False,
+                 aspect: Optional[float] = None):
         YOLO = _yolo_class()  # lazy; torch before cv2
         self._model = YOLO(model)
         self._conf = conf
+        self._imgsz = imgsz
+        self._clahe = clahe
+        self._aspect = aspect
 
     def detect(self, frame: Frame) -> list[Detection]:
-        results = self._model.predict(
-            frame, classes=[PERSON_CLASS], conf=self._conf, verbose=False
-        )[0]
+        scale_x = 1.0
+        if self._aspect:
+            import cv2
+            h, w = frame.shape[:2]
+            target_w = int(round(h * self._aspect))
+            if target_w > 0 and abs(target_w - w) > 2:
+                frame = cv2.resize(frame, (target_w, h),
+                                   interpolation=cv2.INTER_LINEAR)
+                scale_x = w / float(target_w)   # map detections back
+        if self._clahe:
+            frame = apply_clahe(frame)
+        kwargs = {"classes": [PERSON_CLASS], "conf": self._conf, "verbose": False}
+        if self._imgsz:
+            kwargs["imgsz"] = self._imgsz
+        results = self._model.predict(frame, **kwargs)[0]
         dets: list[Detection] = []
         for b in results.boxes:
-            xyxy = tuple(float(v) for v in b.xyxy[0].tolist())
-            dets.append(Detection(bbox=xyxy, confidence=float(b.conf[0]), label="person"))
+            x1, y1, x2, y2 = (float(v) for v in b.xyxy[0].tolist())
+            if scale_x != 1.0:
+                x1, x2 = x1 * scale_x, x2 * scale_x
+            dets.append(Detection(bbox=(x1, y1, x2, y2),
+                                  confidence=float(b.conf[0]), label="person"))
         return dets
 
 
