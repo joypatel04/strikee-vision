@@ -101,3 +101,16 @@ def test_normal_mode_still_creates_assets(db_path):
     names, sensors = _inspect(db_path)
     assert names == ["Table 1", "Table 2"]
     assert all(s == [("snooker_game", "primary")] for s in sensors.values())
+
+
+def test_a_mismatch_shows_what_names_do_exist(db_path, capsys):
+    """The match is exact and the usual failure is a slightly different name -
+    'Table 4' against 'Snooker Table 4'. Naming only what is missing leaves you
+    guessing what to type instead."""
+    _snooker(db_path, [_z("Snooker Table 3"), _z("Snooker Table 4")])
+    _snooker(db_path, [_z("Table 4")], mode="occupancy", attach=True)
+
+    out = capsys.readouterr().out
+    assert "NO ASSET NAMED: Table 4" in out
+    assert "Snooker Table 3, Snooker Table 4" in out, (
+        "did not list the names that would have worked")

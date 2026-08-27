@@ -257,10 +257,17 @@ def write_config(db_path, source, venue_name, source_name, bu_name,
                     "zone_id": zone["id"], "type": mode, "role": sensor_role})
                 attached += 1
             if missing:
+                # Say what DOES exist. The match is exact, and the failure is
+                # almost always a name typed slightly differently at the prompt
+                # ("Table 4" vs "Snooker Table 4") - which is impossible to spot
+                # without seeing the list.
+                existing = sorted(a["name"] for a in
+                                  repos["asset"].list(cur)
+                                  if a.get("venue_id") == venue["id"])
                 print(f"\n  NO ASSET NAMED: {', '.join(missing)}")
-                print("  Attaching matches an existing asset by name, so these were "
-                      "skipped. Draw the asset itself first, then re-run with names "
-                      "that match exactly.")
+                print("  Attaching matches an existing asset by name, exactly.")
+                print(f"  This venue has: {', '.join(existing) or '(none yet)'}")
+                print("  Re-run and name the polygon to match one of those.")
             print(f"  attached {attached} {mode} sensor(s) to existing asset(s)")
             zones = []          # nothing left to create; fall through to the exit
 
