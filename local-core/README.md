@@ -281,6 +281,10 @@ deletes your database backups along with old snapshots.
   for `occupancy`, remembering people are placed at the *bottom-centre* of their
   box — for someone seated that is the seat, not the floor in front; the **panel
   only** for `screen`.
+- `--with-screen` draws **two polygons per station in one pass** - the seating
+  area, then that station's screen - naming it once. For a gaming lounge this
+  halves the runs and removes the exact-name match between a screen and its
+  station.
 - `--attach` adds the zones as **extra sensors on existing assets** of the same
   name, rather than creating assets. Use it to watch one table both ways (balls
   *and* people), or to add a second camera angle. `--mode screen` always

@@ -67,8 +67,14 @@ def grab_frame(source: str):
 
 
 def draw_zones(frame, max_w: int = 1280, max_h: int = 720,
-               aspect: float | None = None) -> list[dict]:
-    """Interactive polygon drawing. Returns [{name, polygon}, ...].
+               aspect: float | None = None, paired: bool = False) -> list[dict]:
+    """Interactive polygon drawing. Returns [{name, polygon, kind}, ...].
+
+    `paired` asks for TWO polygons per asset - the seating area, then that
+    station's screen - naming it once. A gaming station needs both, and drawing
+    them in separate passes means naming each screen to match its station
+    exactly, from memory, six times. Doing it in one pass is half the work and
+    removes the mismatch entirely.
 
     The DVR's main stream is 960x1080 - taller than most screens once the title
     bar and taskbar are accounted for - so at native size the bottom of the table
@@ -82,6 +88,7 @@ def draw_zones(frame, max_w: int = 1280, max_h: int = 720,
 
     zones: list[dict] = []
     points: list[list[int]] = []
+    pending: str | None = None      # asset awaiting its screen polygon
     window = "Draw a zone per table — click, 'n' name, 'u' undo, 's' save, 'q' quit"
 
     h, w = frame.shape[:2]
@@ -142,16 +149,34 @@ def draw_zones(frame, max_w: int = 1280, max_h: int = 720,
             points.pop(); redraw()
         elif key == ord("n"):
             if len(points) >= 3:
-                name = input("Table/station name (e.g. 'Snooker Table 1'): ").strip() \
-                    or f"Asset {len(zones)+1}"
-                zones.append({"name": name, "polygon": list(points)})
+                if pending is None:
+                    name = input("Station/table name: ").strip() \
+                        or f"Asset {len(zones)+1}"
+                    zones.append({"name": name, "polygon": list(points),
+                                  "kind": "asset"})
+                    if paired:
+                        pending = name
+                        print(f"  added '{name}'. NOW DRAW ITS SCREEN "
+                              f"(the panel only), then press 'n' again.")
+                    else:
+                        print(f"  added '{name}' ({len(zones)} total)")
+                else:
+                    # second polygon of a pair: the screen, same name, no prompt
+                    zones.append({"name": pending, "polygon": list(points),
+                                  "kind": "screen"})
+                    print(f"  added screen for '{pending}'. Next station, or 's' "
+                          f"to save.")
+                    pending = None
                 points.clear(); redraw()
-                print(f"  added '{name}' ({len(zones)} total)")
             else:
                 print("  need at least 3 points first")
         elif key == ord("s"):
             if len(points) >= 3:
                 print("  finish the current polygon with 'n' first (or 'u' to clear)")
+                continue
+            if pending is not None:
+                print(f"  '{pending}' has no screen yet - draw it and press 'n', "
+                      f"or press 'q' to discard everything and start over")
                 continue
             break
         elif key == ord("q"):
@@ -271,6 +296,11 @@ def write_config(db_path, source, venue_name, source_name, bu_name,
             print(f"  attached {attached} {mode} sensor(s) to existing asset(s)")
             zones = []          # nothing left to create; fall through to the exit
 
+        # A paired run carries both kinds. Assets first, then their screens
+        # attach to what was just created - one pass, no name to retype.
+        screens = [z for z in zones if z.get("kind") == "screen"]
+        zones = [z for z in zones if z.get("kind") != "screen"]
+
         for z in zones:
             asset = repos["asset"].create(cur, {
                 "venue_id": venue["id"], "space_id": space["id"],
@@ -281,6 +311,20 @@ def write_config(db_path, source, venue_name, source_name, bu_name,
             repos["sensor"].create(cur, {
                 "asset_id": asset["id"], "video_source_id": src["id"],
                 "zone_id": zone["id"], "type": mode, "role": "primary"})
+        for z in screens:
+            asset = _find(repos["asset"], cur, venue_id=venue["id"], name=z["name"])
+            if asset is None:
+                print(f"  screen for '{z['name']}' skipped - no such asset")
+                continue
+            zone = repos["zone"].create(cur, {
+                "space_id": asset["space_id"] or space["id"],
+                "name": f"{z['name']} screen", "polygons": [z["polygon"]]})
+            repos["sensor"].create(cur, {
+                "asset_id": asset["id"], "video_source_id": src["id"],
+                "zone_id": zone["id"], "type": "screen", "role": "supporting"})
+        if screens:
+            print(f"  attached {len(screens)} screen zone(s)")
+
     db.close()
     return venue["id"]
 
@@ -298,6 +342,10 @@ def main():
                          "screen (a TV zone ATTACHED to an existing asset - name "
                          "each polygon exactly like the station it belongs to)")
     ap.add_argument("--db", default=os.environ.get("STRIKEE_DB", "strikee.db"))
+    ap.add_argument("--with-screen", action="store_true",
+                    help="draw TWO polygons per station in one pass - the seating "
+                         "area, then that station's screen - naming it once. Saves "
+                         "a second run and removes the exact-name match.")
     ap.add_argument("--attach", action="store_true",
                     help="add these zones as extra sensors on EXISTING assets of "
                          "the same name, instead of creating new assets. Use it to "
@@ -349,11 +397,12 @@ def main():
         except (ValueError, ZeroDivisionError):
             print(f"--aspect must look like 16:9 or 1.78, got {args.aspect!r}")
             sys.exit(2)
-    zones = draw_zones(frame, max_w=max_w, max_h=max_h, aspect=aspect)
+    zones = draw_zones(frame, max_w=max_w, max_h=max_h, aspect=aspect,
+                       paired=args.with_screen)
     if not zones:
         print("No zones drawn — nothing written."); return
 
-    for a, b in _overlapping_pairs(zones):
+    for a, b in _overlapping_pairs([z for z in zones if z.get("kind") != "screen"]):
         print(f"  WARNING: '{a}' and '{b}' overlap. A person standing in the shared "
               f"area will mark BOTH occupied, so one customer becomes two sessions. "
               f"Re-run and keep them apart if that area is reachable.")

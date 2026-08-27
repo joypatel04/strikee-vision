@@ -114,3 +114,54 @@ def test_a_mismatch_shows_what_names_do_exist(db_path, capsys):
     assert "NO ASSET NAMED: Table 4" in out
     assert "Snooker Table 3, Snooker Table 4" in out, (
         "did not list the names that would have worked")
+
+
+# --------------------------------------------------- one-pass station + screen
+
+
+def _paired(name, seat, tv):
+    return [{"name": name, "polygon": seat, "kind": "asset"},
+            {"name": name, "polygon": tv, "kind": "screen"}]
+
+
+SEAT = [[0, 0], [40, 0], [40, 40]]
+TV = [[50, 0], [70, 0], [70, 20]]
+
+
+def _gaming(db_path, zones):
+    return write_config(db_path, "rtsp://ch9", "Strikee Club", "Gaming Camera A",
+                        "Gaming Lounge", "Gaming Station", zones, mode="occupancy")
+
+
+def test_one_pass_creates_the_station_and_attaches_its_screen(db_path):
+    _gaming(db_path, _paired("RED", SEAT, TV) + _paired("ORANGE", SEAT, TV))
+
+    names, sensors = _inspect(db_path)
+    assert names == ["ORANGE", "RED"], "a screen became an asset of its own"
+    for station in names:
+        assert sorted(sensors[station]) == [("occupancy", "primary"),
+                                            ("screen", "supporting")]
+
+
+def test_screens_do_not_count_as_assets_for_overlap(db_path):
+    """A screen sits inside or beside its own station's zone by design; warning
+    about that every time would train you to ignore the warning."""
+    from field_setup import _overlapping_pairs
+    zones = _paired("RED", SEAT, SEAT)          # screen overlapping its own seat
+    assets_only = [z for z in zones if z.get("kind") != "screen"]
+    assert _overlapping_pairs(assets_only) == []
+
+
+def test_unpaired_zones_still_work(db_path):
+    """Runs without --with-screen carry no 'kind' at all."""
+    _gaming(db_path, [{"name": "BLUE", "polygon": SEAT}])
+    names, sensors = _inspect(db_path)
+    assert names == ["BLUE"]
+    assert sensors["BLUE"] == [("occupancy", "primary")]
+
+
+def test_a_screen_whose_station_is_missing_is_skipped(db_path, capsys):
+    _gaming(db_path, [{"name": "LIME", "polygon": TV, "kind": "screen"}])
+    names, _ = _inspect(db_path)
+    assert names == [], "an orphan screen created an asset"
+    assert "no such asset" in capsys.readouterr().out
