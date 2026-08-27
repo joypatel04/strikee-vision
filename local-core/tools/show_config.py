@@ -103,6 +103,13 @@ def main() -> int:
                     print("        (no sensors - this asset is never observed)")
 
     used = {s.get("video_source_id") for s in sensors}
+    # Two cameras with one name is easy to create - the name is a label, the url
+    # is the identity - and it makes every by-name lookup ambiguous.
+    seen_names = {}
+    for src in sources.values():
+        seen_names.setdefault(src["name"], []).append(src)
+    dupes = {n: v for n, v in seen_names.items() if len(v) > 1}
+
     print("\n  Cameras")
     for src in sources.values():
         if args.venue and src["venue_id"] not in {v["id"] for v in venues}:
@@ -113,6 +120,17 @@ def main() -> int:
         print(f"    {src['name']:<20} {short(src['id'])}{mark}")
         print(f"        {_mask(src.get('uri'))}")
         print(f"        watches: {', '.join(watching) or 'nothing'}")
+
+    if dupes:
+        print("\n  DUPLICATE NAMES - by-name lookups cannot tell these apart:")
+        for name, group in dupes.items():
+            print(f"    {len(group)} cameras named {name!r}:")
+            for src in group:
+                ch = re.search(r"[?&]channel=(\d+)", src.get("uri") or "")
+                where = f"channel {ch.group(1)}" if ch else _mask(src.get("uri"))
+                print(f"        {short(src['id'])}  {where}")
+        print("    Fix with: python tools/rename_cameras.py --auto")
+        print("    (tracking is unaffected - a camera is identified by its url)")
 
     # The point of the listing: knowing what to type next.
     print("""

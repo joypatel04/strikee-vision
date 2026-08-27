@@ -231,6 +231,15 @@ def _find(repo, cur, **match):
     return None
 
 
+class AmbiguousCamera(Exception):
+    """More than one camera answers to this name."""
+
+    def __init__(self, name, matches):
+        self.name = name
+        self.matches = matches
+        super().__init__(f"{len(matches)} cameras are named {name!r}")
+
+
 def source_uri_by_name(db_path, venue_name, source_name):
     """The RTSP url of a configured camera, so a command need not carry it.
 
@@ -245,9 +254,15 @@ def source_uri_by_name(db_path, venue_name, source_name):
             venue = _find(repos["venue"], cur, name=venue_name)
             if venue is None:
                 return None
-            src = _find(repos["video_source"], cur,
-                        venue_id=venue["id"], name=source_name)
-            return src["uri"] if src else None
+            matches = [s for s in repos["video_source"].list(cur)
+                       if s.get("venue_id") == venue["id"]
+                       and s.get("name") == source_name]
+            if len(matches) > 1:
+                # Cameras are identified by url, so two can share a name - which
+                # happens the moment a channel is set up with the wrong label.
+                # Picking one silently would redraw zones on the wrong camera.
+                raise AmbiguousCamera(source_name, matches)
+            return matches[0]["uri"] if matches else None
     finally:
         db.close()
 
@@ -477,7 +492,19 @@ def main():
     if not args.source:
         # Redrawing an existing camera: look its url up rather than making
         # someone paste a password into their shell history.
-        looked_up = source_uri_by_name(args.db, args.venue, args.source_name)
+        try:
+            looked_up = source_uri_by_name(args.db, args.venue, args.source_name)
+        except AmbiguousCamera as exc:
+            print(f"{len(exc.matches)} cameras are named {exc.name!r}, so this "
+                  f"would redraw the wrong one:")
+            for m in exc.matches:
+                print(f"    {m['id'][:8]}  {_mask_uri(m.get('uri'))}")
+            print("\n  Give them distinct names first:")
+            print(f"    python tools/rename_cameras.py --auto")
+            print("  or rename one by id:")
+            print(f"    python tools/rename_cameras.py --set {exc.matches[-1]['id'][:8]} "
+                  f"\"Gaming Camera D\"")
+            sys.exit(2)
         if looked_up is None:
             print(f"No camera named {args.source_name!r} in {args.venue!r}. "
                   f"Pass --source with its url, or check "

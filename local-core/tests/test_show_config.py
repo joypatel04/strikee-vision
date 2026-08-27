@@ -88,3 +88,48 @@ def test_an_asset_with_no_sensors_is_called_out(tmp_path):
     conn.execute("DELETE FROM sensors")
     conn.commit(); conn.close()
     assert "never observed" in _run(db)
+
+
+# ------------------------------------------------- two cameras, one name
+
+
+def _dupe_named(tmp_path):
+    """A channel set up with the wrong label: same name, different url."""
+    db = str(tmp_path / "d.db")
+    for ch in (11, 12):
+        write_config(db, BASE.format(c=ch), "Strikee Club", "Gaming Camera C",
+                     "Gaming Lounge", "Gaming Station",
+                     [{"name": f"S{ch}", "polygon": POLY}], mode="occupancy")
+    return db
+
+
+def test_duplicate_camera_names_are_flagged(tmp_path):
+    out = _run(_dupe_named(tmp_path))
+    assert "DUPLICATE NAMES" in out
+    assert "channel 11" in out and "channel 12" in out
+    assert "tracking is unaffected" in out, (
+        "does not say the important part - detection still works")
+
+
+def test_by_name_lookup_refuses_rather_than_guessing(tmp_path):
+    """Picking one of two silently would redraw zones on the wrong camera."""
+    from field_setup import AmbiguousCamera
+    with pytest.raises(AmbiguousCamera) as exc:
+        source_uri_by_name(_dupe_named(tmp_path), "Strikee Club", "Gaming Camera C")
+    assert len(exc.value.matches) == 2
+
+
+def test_each_duplicate_still_watches_its_own_assets(tmp_path):
+    """The names collide; the sensors do not. Nothing is actually crossed."""
+    db = _dupe_named(tmp_path)
+    out = _run(db)
+    assert "watches: S11" in out and "watches: S12" in out
+
+
+def test_renaming_resolves_the_ambiguity(tmp_path):
+    db = _dupe_named(tmp_path)
+    subprocess.run([sys.executable, str(ROOT / "tools" / "rename_cameras.py"),
+                    "--db", db, "--auto"], capture_output=True, cwd=str(ROOT))
+    uri = source_uri_by_name(db, "Strikee Club", "Channel 12")
+    assert uri and "channel=12" in uri
+    assert "DUPLICATE NAMES" not in _run(db)
