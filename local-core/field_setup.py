@@ -67,7 +67,8 @@ def grab_frame(source: str):
 
 
 def draw_zones(frame, max_w: int = 1280, max_h: int = 720,
-               aspect: float | None = None, paired: bool = False) -> list[dict]:
+               aspect: float | None = None, paired: bool = False,
+               existing: list | None = None) -> list[dict]:
     """Interactive polygon drawing. Returns [{name, polygon, kind}, ...].
 
     `paired` asks for TWO polygons per asset - the seating area, then that
@@ -118,6 +119,15 @@ def draw_zones(frame, max_w: int = 1280, max_h: int = 720,
 
     def redraw():
         canvas = display.copy()
+        # What is already configured on this camera, dimmed. Redrawing a zone
+        # blind - without seeing the one you are replacing - is how a small
+        # improvement turns into a worse polygon.
+        for old in (existing or []):
+            pts = np.array([to_disp(pt) for pt in old["polygon"]], dtype=np.int32)
+            cv2.polylines(canvas, [pts], True, (90, 90, 90), 1)
+            ox, oy = pts.min(axis=0)
+            cv2.putText(canvas, f"current: {old['name']}", (int(ox), max(12, int(oy) - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (120, 120, 120), 1)
         for z in zones:
             poly = np.array([to_disp(pt) for pt in z["polygon"]], dtype=np.int32)
             cv2.polylines(canvas, [poly], True, (0, 200, 0), 2)
@@ -213,6 +223,74 @@ def _find(repo, cur, **match):
         if all(row.get(k) == v for k, v in match.items()):
             return row
     return None
+
+
+def existing_zones(db_path, venue_name, source_uri, mode=None) -> list[dict]:
+    """Zones already configured on this camera, for drawing underneath."""
+    repos = {s.name: Repository(s) for s in REGISTRY}
+    db = Database(db_path)
+    try:
+        with db.cursor() as cur:
+            venue = _find(repos["venue"], cur, name=venue_name)
+            if venue is None:
+                return []
+            src = _find(repos["video_source"], cur, venue_id=venue["id"], uri=source_uri)
+            if src is None:
+                return []
+            assets = {a["id"]: a["name"] for a in repos["asset"].list(cur)
+                      if a.get("venue_id") == venue["id"]}
+            zones = {z["id"]: z for z in repos["zone"].list(cur)}
+            out = []
+            for sensor in repos["sensor"].list(cur):
+                if sensor.get("video_source_id") != src["id"]:
+                    continue
+                if mode and sensor.get("type") != mode:
+                    continue
+                zone = zones.get(sensor.get("zone_id")) or {}
+                for poly in (zone.get("polygons") or []):
+                    out.append({"name": assets.get(sensor["asset_id"], "?"),
+                                "polygon": poly})
+            return out
+    finally:
+        db.close()
+
+
+def redraw_zones(db_path, source_uri, venue_name, zones, mode) -> tuple[int, list]:
+    """Replace the polygons of existing sensors, in place.
+
+    The asset keeps its id, so its sessions, games and any screen sensor are
+    untouched - only the shape changes. Deleting and redrawing would lose the
+    history, which is the thing you were trying to improve the accuracy of.
+    """
+    repos = {s.name: Repository(s) for s in REGISTRY}
+    db = Database(db_path)
+    updated, missing = 0, []
+    try:
+        with db.cursor() as cur:
+            venue = _find(repos["venue"], cur, name=venue_name)
+            src = _find(repos["video_source"], cur,
+                        venue_id=venue["id"], uri=source_uri) if venue else None
+            if venue is None or src is None:
+                return 0, [z["name"] for z in zones]
+            for z in zones:
+                asset = _find(repos["asset"], cur, venue_id=venue["id"], name=z["name"])
+                if asset is None:
+                    missing.append(z["name"])
+                    continue
+                sensor = next(
+                    (s for s in repos["sensor"].list(cur)
+                     if s["asset_id"] == asset["id"]
+                     and s.get("type") == mode
+                     and s.get("video_source_id") == src["id"]), None)
+                if sensor is None or not sensor.get("zone_id"):
+                    missing.append(z["name"])
+                    continue
+                repos["zone"].update(cur, sensor["zone_id"],
+                                     {"polygons": [z["polygon"]]})
+                updated += 1
+    finally:
+        db.close()
+    return updated, missing
 
 
 def write_config(db_path, source, venue_name, source_name, bu_name,
@@ -342,6 +420,11 @@ def main():
                          "screen (a TV zone ATTACHED to an existing asset - name "
                          "each polygon exactly like the station it belongs to)")
     ap.add_argument("--db", default=os.environ.get("STRIKEE_DB", "strikee.db"))
+    ap.add_argument("--redraw", action="store_true",
+                    help="REPLACE the polygons of existing assets of the same "
+                         "name on this camera, instead of creating anything. The "
+                         "assets keep their id, so sessions, games and screen "
+                         "sensors survive - only the shape changes.")
     ap.add_argument("--with-screen", action="store_true",
                     help="draw TWO polygons per station in one pass - the seating "
                          "area, then that station's screen - naming it once. Saves "
@@ -397,10 +480,32 @@ def main():
         except (ValueError, ZeroDivisionError):
             print(f"--aspect must look like 16:9 or 1.78, got {args.aspect!r}")
             sys.exit(2)
+    prior = existing_zones(args.db, args.venue, args.source,
+                           mode=args.mode if args.redraw else None)
+    if args.redraw:
+        if not prior:
+            print(f"Nothing to redraw: no {args.mode} zones on this camera in "
+                  f"'{args.venue}'.")
+            sys.exit(2)
+        print(f"REDRAW - the current zones are outlined in grey. Draw the "
+              f"replacement for each and name it the same:")
+        for z in prior:
+            print(f"    {z['name']}")
     zones = draw_zones(frame, max_w=max_w, max_h=max_h, aspect=aspect,
-                       paired=args.with_screen)
+                       paired=args.with_screen, existing=prior)
     if not zones:
         print("No zones drawn — nothing written."); return
+
+    if args.redraw:
+        updated, missing = redraw_zones(args.db, args.source, args.venue,
+                                        zones, args.mode)
+        print(f"\n  updated {updated} zone(s) in place")
+        if missing:
+            print(f"  NOT FOUND: {', '.join(missing)}")
+            print(f"  A redraw replaces an existing {args.mode} zone on THIS "
+                  f"camera, matched by asset name. Nothing was created.")
+        print("  Restart strikee-core to pick up the new shapes.")
+        return
 
     for a, b in _overlapping_pairs([z for z in zones if z.get("kind") != "screen"]):
         print(f"  WARNING: '{a}' and '{b}' overlap. A person standing in the shared "

@@ -282,6 +282,10 @@ deletes your database backups along with old snapshots.
   for `occupancy`, remembering people are placed at the *bottom-centre* of their
   box — for someone seated that is the seat, not the floor in front; the **panel
   only** for `screen`.
+- `--redraw` **replaces** the polygons of existing assets of the same name on
+  this camera. The current shapes are outlined in grey while you draw, and the
+  assets keep their ids - so sessions, games and screen sensors all survive and
+  only the shape changes. Restart `strikee-core` afterwards.
 - `--with-screen` draws **two polygons per station in one pass** - the seating
   area, then that station's screen - naming it once. For a gaming lounge this
   halves the runs and removes the exact-name match between a screen and its
