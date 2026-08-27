@@ -280,9 +280,15 @@ def warnings(cfg: list[dict], perception: dict, models: list[dict]) -> list[dict
     if _is_set("TURSO_DATABASE_URL"):
         if not _is_set("TURSO_AUTH_TOKEN"):
             warn("error", "TURSO_DATABASE_URL is set but TURSO_AUTH_TOKEN is not — sync will fail.")
-        if perception["libsql"] is None:
-            warn("error", 'Turso is configured but the libsql client is not installed. '
-                          'Run: pip install -e ".[turso]"')
+        # Only the embedded replica needs the native client. Push mode talks
+        # plain HTTP, so demanding libsql there sends someone to install a
+        # native package they do not use - on the machine where native packages
+        # were the original problem.
+        mode = by_name["STRIKEE_SYNC_MODE"]["effective"] or "replica"
+        if str(mode).lower() == "replica" and perception["libsql"] is None:
+            warn("error", 'Turso is configured in replica mode but the libsql '
+                          'client is not installed. Run: pip install -e ".[turso]" '
+                          '- or set STRIKEE_SYNC_MODE=push, which needs no client.')
 
     # --- object storage: the endpoint is what makes R2 work ---------------
     for bucket_knob, endpoint_knob, what in (
@@ -298,14 +304,10 @@ def warnings(cfg: list[dict], perception: dict, models: list[dict]) -> list[dict
         if bucket_knob == "STRIKEE_S3_BUCKET" and not endpoint_set:
             endpoint_set = _is_set("STRIKEE_BACKUP_ENDPOINT")
         if not endpoint_set:
-            # Going to Amazon is a legitimate choice, so this is a note, not a
-            # complaint - but someone who meant R2 and forgot the endpoint would
-            # otherwise get no hint at all.
-            warn("info", f"{bucket_knob} has no endpoint set, so {what} go to Amazon "
-                         f"S3. For Cloudflare R2 instead, set {endpoint_knob} to "
-                         "https://<account-id>.r2.cloudflarestorage.com")
-            # Real AWS needs a real region - "auto" is an R2 convention and
-            # resolves to nothing on AWS.
+            # No endpoint means Amazon, which is a legitimate choice and needs no
+            # comment. Only say something when it cannot work: AWS needs a real
+            # region ("auto" is an R2 convention that resolves to nothing there)
+            # and it needs credentials.
             region_knob = ("STRIKEE_S3_REGION" if bucket_knob == "STRIKEE_S3_BUCKET"
                            else "STRIKEE_BACKUP_REGION")
             has_region = (_is_set(region_knob)
@@ -314,17 +316,14 @@ def warnings(cfg: list[dict], perception: dict, models: list[dict]) -> list[dict
             if not has_region:
                 warn("warn", f"{bucket_knob} is set for Amazon S3 but no region is "
                              f"configured. Set AWS_DEFAULT_REGION (e.g. ap-south-1) "
-                             f"or {region_knob}, or uploads will fail to resolve.")
+                             f"or {region_knob}, or uploads will fail to resolve. "
+                             f"(If you meant Cloudflare R2, set {endpoint_knob} "
+                             f"instead.)")
             if not (os.environ.get("AWS_ACCESS_KEY_ID")
                     or os.environ.get("AWS_PROFILE")):
                 warn("warn", f"{bucket_knob} is set but no AWS credentials are in the "
                              "environment. Set AWS_ACCESS_KEY_ID and "
                              "AWS_SECRET_ACCESS_KEY in .env.")
-
-    if _is_set("TURSO_DATABASE_URL") and _is_set("STRIKEE_BACKUP_BUCKET"):
-        warn("info", "Turso sync and database backups are both on. Turso already keeps "
-                     "a cloud copy, so the backup bucket is belt-and-braces - fine, "
-                     "but not required.")
 
     if by_name["STRIKEE_DEBUG"]["source"] in ("environment", "env file"):
         warn("info", "STRIKEE_DEBUG is on — debug_<venue>.csv is being written. "
