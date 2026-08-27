@@ -91,12 +91,54 @@ def _check_rtsp(uri: str) -> bool:
         return False
 
 
+def _check_turso_push() -> bool:
+    """Push mode: local SQLite stays authoritative and rows go up over HTTP.
+
+    The backend being sqlite3 is the whole point here, so this proves the
+    remote end instead - that the endpoint answers, the token works, and we can
+    create and write, which is what a push cycle actually does.
+    """
+    import os
+    from .cloudsync import TursoPush
+
+    url = os.environ.get("TURSO_DATABASE_URL")
+    token = os.environ.get("TURSO_AUTH_TOKEN")
+    if not (url and token):
+        print(f"{FAIL} STRIKEE_SYNC_MODE=push but TURSO_DATABASE_URL/TOKEN are not set")
+        return False
+    host = url.replace("libsql://", "").replace("https://", "").rstrip("/")
+    try:
+        # db is unused by the transport - this only exercises the remote end.
+        TursoPush(None, url, token)._pipeline([
+            {"sql": "CREATE TABLE IF NOT EXISTS _doctor_push (id TEXT PRIMARY KEY)"},
+            {"sql": "INSERT OR REPLACE INTO _doctor_push (id) VALUES (?)",
+             "args": [{"type": "text", "value": "probe"}]},
+            {"sql": "SELECT COUNT(*) FROM _doctor_push"},
+            {"sql": "DROP TABLE _doctor_push"},
+        ])
+    except Exception as exc:
+        print(f"{FAIL} Turso push: cannot write to {host}: {exc}")
+        print("       Check it with: python tools/turso_check.py <url> <token>")
+        return False
+    print(f"{OK} Turso push: remote reachable and writable "
+          f"(local SQLite stays the source of truth)")
+    return True
+
+
 def _check_turso() -> bool:
     """If Turso env is configured, prove the whole round-trip on THIS machine:
     the libsql client imports (native dep — the Windows risk), an embedded
     replica connects, a write lands locally, sync() reaches the cloud, and it
     reads back. Skipped (as a pass) when Turso isn't configured."""
     import os
+    mode = os.environ.get("STRIKEE_SYNC_MODE", "").lower()
+    if mode == "off":
+        print(f"{WARN} skipped Turso check (STRIKEE_SYNC_MODE=off)")
+        return True
+    if mode == "push":
+        # Not a libsql replica at all, so none of the checks below apply: the
+        # backend is sqlite3 by design and libsql need not even be installed.
+        return _check_turso_push()
     if not (os.environ.get("TURSO_DATABASE_URL") and os.environ.get("TURSO_AUTH_TOKEN")):
         print(f"{WARN} skipped Turso check (TURSO_DATABASE_URL/TOKEN not set)")
         return True
@@ -116,7 +158,9 @@ def _check_turso() -> bool:
                 pass
         db = Database(tmp)
         if db.backend != "turso":
-            print(f"{FAIL} Turso env set but backend is '{db.backend}'")
+            print(f"{FAIL} Turso env set but backend is '{db.backend}'. If this "
+                  f"database has no /v1 replication endpoints, set "
+                  f"STRIKEE_SYNC_MODE=push instead.")
             return False
         with db.cursor() as cur:
             cur.execute("CREATE TABLE IF NOT EXISTS _doctor (v TEXT)")
