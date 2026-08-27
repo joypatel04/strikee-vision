@@ -35,9 +35,71 @@ def _fault(key: str, severity: str, title: str, detail: str, action: str) -> dic
             "detail": detail, "action": action}
 
 
+def _network_faults(db) -> list[dict]:
+    """Which of the two networks is actually down.
+
+    Tested directly rather than inferred from camera failures, so it is right
+    even with the pipeline stopped - and it names the adapter, because "cameras
+    are failing" sends someone to the DVR when the answer is a dongle that fell
+    off the extender.
+    """
+    from . import netcheck
+
+    try:
+        state = netcheck.check(db)
+    except Exception:
+        return []
+
+    faults: list[dict] = []
+    configured = state["cameras_configured"]
+    reachable = state["cameras_reachable"]
+    hosts = ", ".join(h["host"] for h in state["camera_hosts"]) or "the DVR"
+
+    if configured and reachable == 0:
+        if state["internet"]:
+            # The distinction that matters: the box is online, so this is not
+            # "the internet is down" - it is the camera-side adapter.
+            faults.append(_fault(
+                "camera-network-down", ERROR,
+                "Cannot reach the cameras",
+                f"{hosts} does not answer, but this PC does have internet - so "
+                "the box is online and it is the camera network that is down. "
+                "Nothing is being recorded.",
+                "Check the wifi adapter connected to the extender: is it "
+                "connected, and does it have a 192.168.0.x address? Then check "
+                "the DVR is powered on.",
+            ))
+        else:
+            faults.append(_fault(
+                "all-networks-down", ERROR,
+                "No network at all",
+                f"Neither {hosts} nor the internet answers. Nothing is being "
+                "recorded and nothing is syncing.",
+                "Check both wifi adapters, then the router.",
+            ))
+    elif configured and reachable < configured:
+        faults.append(_fault(
+            "some-cameras-unreachable", WARN,
+            f"{configured - reachable} of {configured} camera hosts unreachable",
+            "Some cameras answer and some do not, so this is per-DVR rather than "
+            "a network fault.",
+            "Check the DVR that is not answering.",
+        ))
+    elif not state["internet"] and configured:
+        faults.append(_fault(
+            "internet-down", WARN,
+            "No internet",
+            "The cameras are reachable and recording continues normally. Cloud "
+            "sync and snapshot upload are paused and will catch up - nothing is "
+            "lost.",
+            "Check the wifi adapter on the internet network.",
+        ))
+    return faults
+
+
 def check(db, runtime_manager, sync_status=None) -> list[dict]:
     """Current system faults, most severe first. Never raises."""
-    faults: list[dict] = []
+    faults: list[dict] = list(_network_faults(db))
 
     # --- cameras: the DVR-facing network ---------------------------------
     try:
@@ -45,7 +107,11 @@ def check(db, runtime_manager, sync_status=None) -> list[dict]:
     except Exception:
         running = []
 
+    network_down = any(f["key"] in ("camera-network-down", "all-networks-down")
+                       for f in faults)
     for venue_id in running:
+        if network_down:
+            break          # already reported at the network level; one fault, not N
         try:
             cameras = runtime_manager.capture_status(venue_id)
         except Exception:
@@ -84,7 +150,9 @@ def check(db, runtime_manager, sync_status=None) -> list[dict]:
         sync = sync_status() if sync_status is not None else db.sync_status()
     except Exception:
         sync = None
-    if sync and sync.get("sync_enabled") and not sync.get("healthy"):
+    internet_down = any(f["key"] in ("internet-down", "all-networks-down")
+                        for f in faults)
+    if sync and sync.get("sync_enabled") and not sync.get("healthy") and not internet_down:
         age = sync.get("seconds_since_sync")
         age_text = f"{int(age)}s ago" if age is not None else "never"
         faults.append(_fault(

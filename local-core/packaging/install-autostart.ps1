@@ -22,6 +22,9 @@
 param(
     [string] $VenueId = "all",
     [int]    $DelaySeconds = 45,
+    [string] $CameraAdapter = "",     # e.g. "Wi-Fi"  - adapter that reaches the DVR
+    [string] $CameraSsid = "",        # e.g. "Strikee-AP"
+    [switch] $ShortcutOnly,           # just make the desktop icon, nothing else
     [switch] $Headless,
     [switch] $Uninstall,
     [switch] $NoPowerConfig
@@ -43,9 +46,31 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit 1
 }
 
+# --- desktop shortcut ---------------------------------------------------------
+function New-DesktopShortcut([string]$Root, [string]$Exe) {
+    $desktop = [Environment]::GetFolderPath("Desktop")
+    $link = Join-Path $desktop "Strikee Vision.lnk"
+    $shell = New-Object -ComObject WScript.Shell
+    $sc = $shell.CreateShortcut($link)
+    $sc.TargetPath = $Exe
+    # WorkingDirectory is not decoration: .env, strikee.db, best.pt and the
+    # snapshots folder are all resolved relative to it.
+    $sc.WorkingDirectory = $Root
+    $sc.Description = "Start Strikee Vision and open the dashboard"
+    $sc.IconLocation = "$Exe,0"
+    $sc.Save()
+    return $link
+}
+
 # --- uninstall ----------------------------------------------------------------
 if ($Uninstall) {
     Step "Removing autostart"
+    $link = Join-Path ([Environment]::GetFolderPath("Desktop")) "Strikee Vision.lnk"
+    if (Test-Path $link) { Remove-Item $link; Ok "desktop shortcut removed" }
+    if (Get-ScheduledTask -TaskName "StrikeeWifi" -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName "StrikeeWifi" -Confirm:$false
+        Ok "wifi keeper removed"
+    }
     if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
         Ok "scheduled task '$TaskName' removed"
@@ -101,6 +126,15 @@ function Set-EnvValue([string]$Key, [string]$Value) {
 Set-EnvValue "STRIKEE_AUTOSTART_VENUE" $VenueId
 if ($Headless) { Set-EnvValue "STRIKEE_HEADLESS" "1" }
 
+Step "Creating the desktop shortcut"
+$link = New-DesktopShortcut $root $exe
+Ok "$link"
+
+if ($ShortcutOnly) {
+    Write-Host "`nShortcut created. Nothing else was changed." -ForegroundColor Green
+    exit 0
+}
+
 # --- the scheduled task -------------------------------------------------------
 Step "Registering the scheduled task"
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
@@ -128,6 +162,47 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
     -Settings $settings -Principal $taskPrincipal `
     -Description "Strikee Vision local core - starts tracking on logon." | Out-Null
 Ok "task '$TaskName' registered (at logon, +${DelaySeconds}s, restarts up to 5x)"
+
+# --- keep the camera wifi connected -------------------------------------------
+if ($CameraAdapter -and $CameraSsid) {
+    Step "Installing the wifi keeper"
+    # Windows reconnects a saved network on its own, but only if the profile is
+    # set to auto-connect and the adapter has not been left disabled. A dongle
+    # that drops overnight otherwise takes the cameras with it until someone
+    # notices, so this nudges it back every few minutes.
+    $keeperDir = Join-Path $root "packaging"
+    $keeper = Join-Path $keeperDir "wifi-keeper.ps1"
+    @"
+# Reconnect the camera adapter if it has dropped. Installed by install-autostart.ps1.
+`$adapter = "$CameraAdapter"
+`$ssid    = "$CameraSsid"
+try {
+    `$net = (netsh wlan show interfaces) -join "``n"
+    if (`$net -notmatch [regex]::Escape(`$ssid)) {
+        Enable-NetAdapter -Name `$adapter -Confirm:`$false -ErrorAction SilentlyContinue
+        netsh wlan connect name="`$ssid" interface="`$adapter" | Out-Null
+    }
+} catch { }
+"@ | Set-Content -LiteralPath $keeper -Encoding UTF8
+
+    if (Get-ScheduledTask -TaskName "StrikeeWifi" -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName "StrikeeWifi" -Confirm:$false
+    }
+    $wifiAction = New-ScheduledTaskAction -Execute "powershell.exe" `
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$keeper`""
+    $wifiTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $wifiTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+        -RepetitionInterval (New-TimeSpan -Minutes 5) `
+        -RepetitionDuration ([TimeSpan]::MaxValue)).Repetition
+    Register-ScheduledTask -TaskName "StrikeeWifi" -Action $wifiAction `
+        -Trigger $wifiTrigger `
+        -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME `
+            -LogonType Interactive -RunLevel Highest) `
+        -Description "Reconnect the camera wifi adapter if it drops." | Out-Null
+    Ok "checks every 5 min that '$CameraAdapter' is on '$CameraSsid'"
+} else {
+    Warn "no wifi keeper (pass -CameraAdapter 'Wi-Fi' -CameraSsid '<name>' to add one)"
+}
 
 # --- keep the machine awake ---------------------------------------------------
 if (-not $NoPowerConfig) {

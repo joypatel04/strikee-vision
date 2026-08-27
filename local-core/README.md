@@ -301,10 +301,20 @@ deletes your database backups along with old snapshots.
 
 ### The dashboard — `http://127.0.0.1:8760/`
 
-Faults appear as a banner naming what broke and which adapter to check. The box
-has two networks and either can fail alone: losing the cameras stops tracking
-while the dashboard still loads over the other, and losing the internet stops
-sync while every table keeps updating. Both look fine from the wrong angle.
+Faults appear as a banner naming what broke and which adapter to check. The two
+networks are tested **directly**, not inferred from camera behaviour, so this is
+right even with the pipeline stopped:
+
+| Banner | Meaning |
+|---|---|
+| **Cannot reach the cameras** | The DVR does not answer *but this PC has internet* — so the box is online and the camera-side adapter is the problem. |
+| **No network at all** | Neither answers. |
+| **No internet** | Cameras fine, recording continues. Sync and uploads pause and catch up — nothing is lost. |
+| **N of M cameras not responding** | Network is fine; those channels are not. |
+
+Only one fault is raised per cause: a dead camera network does not also produce
+a camera-failure alarm and a stalled-sync alarm, because three alarms for one
+unplugged dongle teaches people to ignore alarms.
 
 **System check** at the bottom shows every setting with where it came from
 (`env file` versus `default`), the installed library versions, model files, live
