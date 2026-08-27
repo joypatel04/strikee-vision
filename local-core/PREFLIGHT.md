@@ -344,11 +344,18 @@ redrawing every polygon, so make the copies real before you need them.
 Add to `.env`:
 
 ```ini
-STRIKEE_BACKUP_BUCKET=strikee-backups
+STRIKEE_BACKUP_BUCKET=strikee-snapshots
+STRIKEE_BACKUP_PREFIX=db-backup
 STRIKEE_BACKUP_EVERY_MIN=30
 ```
 
-Credentials and region are shared with the snapshot upload. The first backup is
+That writes to `s3://strikee-snapshots/db-backup/`, reusing the snapshot bucket -
+credentials, region and endpoint are all shared, so nothing else to configure.
+
+**One caution if you set a lifecycle rule:** an expiry applied to the whole
+bucket deletes the database backups along with old snapshots. Scope the rule to
+the venue-id prefixes, or exclude `db-backup/`. Each backup is a couple of
+hundred KB - they are not what costs you anything. The first backup is
 written about 90 seconds after startup, so a box set up and then lost the same
 evening still has a copy.
 
