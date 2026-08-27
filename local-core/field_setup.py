@@ -215,6 +215,34 @@ def write_config(db_path, source, venue_name, source_name, bu_name,
             print(f"  camera already configured as '{src['name']}' - adding these "
                   f"zones to it (re-running the same channel adds duplicates)")
 
+        if mode == "screen":
+            # A TV is not an asset - it is evidence about one. Each polygon
+            # attaches to the station of the same name, so a station is in use
+            # only when someone is there AND its screen is on.
+            attached, missing = 0, []
+            for z in zones:
+                asset = _find(repos["asset"], cur, venue_id=venue["id"], name=z["name"])
+                if asset is None:
+                    missing.append(z["name"])
+                    continue
+                zone = repos["zone"].create(cur, {
+                    "space_id": asset["space_id"] or space["id"],
+                    "name": f"{z['name']} Screen",
+                    "polygons": [z["polygon"]]})
+                repos["sensor"].create(cur, {
+                    "asset_id": asset["id"], "video_source_id": src["id"],
+                    "zone_id": zone["id"], "type": "screen", "role": "supporting"})
+                attached += 1
+            if missing:
+                print(f"\n  NO ASSET NAMED: {', '.join(missing)}")
+                print("  A screen zone attaches to an existing station by name, so "
+                      "these were skipped.")
+                print("  Draw the station itself first (--mode occupancy), then "
+                      "re-run with names that match exactly.")
+            print(f"  attached {attached} screen zone(s)")
+            db.close()
+            return venue["id"]
+
         for z in zones:
             asset = repos["asset"].create(cur, {
                 "venue_id": venue["id"], "space_id": space["id"],
@@ -237,8 +265,10 @@ def main():
     ap.add_argument("--business-unit", default="Snooker")
     ap.add_argument("--asset-type", default="Snooker Table")
     ap.add_argument("--mode", default="snooker_game",
-                    choices=["snooker_game", "occupancy"],
-                    help="sensor mode: snooker_game (balls, for tables) or occupancy (people)")
+                    choices=["snooker_game", "occupancy", "screen"],
+                    help="snooker_game (balls, for tables), occupancy (people), or "
+                         "screen (a TV zone ATTACHED to an existing asset - name "
+                         "each polygon exactly like the station it belongs to)")
     ap.add_argument("--db", default=os.environ.get("STRIKEE_DB", "strikee.db"))
     ap.add_argument("--aspect", default=os.environ.get("STRIKEE_PERSON_ASPECT"),
                     help="true scene aspect (e.g. 16:9) for channels that deliver "
@@ -256,6 +286,11 @@ def main():
     if args.mode == "snooker_game":
         print("Mode: snooker_game — draw the zone around the TABLE surface "
               "(where the balls are).")
+    elif args.mode == "screen":
+        print("Mode: screen — draw the zone around each TV SCREEN ONLY (just the "
+              "panel, no wall or reflections). Name each one EXACTLY like the "
+              "station it belongs to; it attaches to that asset rather than "
+              "creating a new one.")
     else:
         # People are located by their FEET (the bottom edge of the detection
         # box), so a zone drawn tightly around a seat or a screen misses a

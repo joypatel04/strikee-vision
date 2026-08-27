@@ -89,9 +89,16 @@ class StateEngine:
 
         occ_sensors = [s for s in asset.sensors
                        if s.kind in ("occupancy", "presence", "snooker_game")]
+        # A screen sensor GATES the asset: a gaming station is in use only when
+        # somebody is there AND the TV is on. Somebody sitting on the sofa with
+        # the screen off is not playing, and billing them would be exactly the
+        # leakage this system exists to measure. The gate runs before smoothing,
+        # so the usual exit window still applies - a dark loading screen or a
+        # missed read cannot end a session on its own.
+        screen_sensors = [s for s in asset.sensors if s.kind == "screen"]
 
         # --- health facet: from the sources backing this asset's sensors ---
-        st.health = self._derive_health(occ_sensors, source_ok)
+        st.health = self._derive_health(occ_sensors or screen_sensors, source_ok)
 
         # --- presence facet: primary/supporting fusion + smoothing ---
         if st.health == HEALTH_OFFLINE or not occ_sensors:
@@ -101,6 +108,13 @@ class StateEngine:
             st.confidence = 0.0
         else:
             raw_present, conf = self._fuse_presence(occ_sensors, raw_by_sensor, source_ok)
+            if screen_sensors and raw_present:
+                screen_on = any(
+                    raw_by_sensor.get(s.id, _NO_OBS).present
+                    for s in screen_sensors
+                    if source_ok.get(s.source_id, False))
+                if not screen_on:
+                    raw_present = False
             self._smooth_presence(st, raw_present, enter_ticks, exit_ticks)
             st.confidence = conf
 

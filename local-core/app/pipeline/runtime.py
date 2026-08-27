@@ -10,7 +10,7 @@ from typing import Callable, Optional
 
 import math
 
-from .observe import observe, PERSON_KINDS, SNOOKER_KIND
+from .observe import SCREEN_KIND, observe, PERSON_KINDS, SNOOKER_KIND
 from .perception import Detector
 from .sink import ChangeEvent, StateSink
 from .snooker_game import SnookerGameTracker
@@ -135,6 +135,7 @@ class LiveRuntime:
         self._clock = clock
         self.motion_threshold = motion_threshold
         self._last_label: dict[str, str] = {}
+        self._screen_prev: dict = {}
         self._prev_points: dict[str, list] = {}
         self._last_frames: dict[str, object] = {}   # source_id -> last frame
 
@@ -200,10 +201,20 @@ class LiveRuntime:
                 snooker = self.snooker_detector.detect(frame)
         return {"person": person, "snooker": snooker}
 
-    def _observe_source(self, src: SourceRuntime, bucket: dict) -> None:
+    def _observe_source(self, src: SourceRuntime, bucket: dict, frame=None) -> None:
         """Turn one source's detections into per-sensor observations and write
         them into the rolling caches."""
         for sensor in src.sensors:
+            if sensor.kind == SCREEN_KIND:
+                # Pixel statistics, not detections - a screen is judged on how
+                # bright and how changing its zone is.
+                obs = observe_screen(frame, sensor,
+                                     self._screen_prev.get(sensor.id))
+                self._screen_prev[sensor.id] = obs.pop("crop", None)
+                self._raw_by_sensor[sensor.id] = RawObservation(
+                    present=obs["present"], confidence=obs["confidence"],
+                    count=obs["count"], active=obs["present"])
+                continue
             dets = bucket["snooker"] if sensor.kind == SNOOKER_KIND else bucket["person"]
             obs = observe(sensor.kind, dets, sensor)
             points = obs["points"]
@@ -231,7 +242,7 @@ class LiveRuntime:
         with self._eval_lock:
             self._source_ok[src.id] = ok
             bucket = self._detect_source(src, ok, frame)
-            self._observe_source(src, bucket)
+            self._observe_source(src, bucket, frame if ok else None)
 
     def evaluate_assets(
         self, assets: Optional[list[AssetRuntime]] = None

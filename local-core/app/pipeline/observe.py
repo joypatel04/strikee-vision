@@ -3,6 +3,7 @@ observation, according to the sensor's kind (observation mode).
 
   - person       : a person's feet in the zone -> occupied
   - snooker_game : balls on the table (in the zone) -> a game in progress
+  - screen       : a TV/monitor inside the zone is switched on
 
 Both are 'occupancy-like' (they drive the presence/activity facets). The state
 engine's smoothing + multi-camera fusion provide the persistence that makes this
@@ -15,6 +16,7 @@ from .types import Detection
 
 PERSON_KINDS = {"occupancy", "presence", "person"}
 SNOOKER_KIND = "snooker_game"
+SCREEN_KIND = "screen"
 
 BALL_LABELS = {
     "red_ball", "black_ball", "blue_ball", "brown_ball",
@@ -68,6 +70,64 @@ def observe_snooker_game(detections: list[Detection], sensor) -> dict:
         "red_count": red_count,
         "colored_present": colored_present,
     }
+
+
+def observe_screen(frame, sensor, previous=None) -> dict:
+    """present when the screen inside the zone is on.
+
+    No model: a display that is on is either bright or changing, usually both.
+    Brightness alone is not enough - a dark game scene is dimmer than the room -
+    and change alone is not enough either, because a paused game is perfectly
+    still. Taking either signal covers both, and the state engine's smoothing
+    absorbs the rest.
+
+    `previous` is the same zone's pixels from the last sample; without one we
+    have no change signal and fall back to brightness. Returns the crop so the
+    caller can pass it back next time.
+    """
+    import numpy as np
+
+    crop = _zone_crop(frame, sensor)
+    if crop is None or crop.size == 0:
+        return {"present": False, "count": 0, "confidence": 0.0, "points": [],
+                "luminance": 0.0, "change": 0.0, "crop": None}
+
+    grey = crop.mean(axis=2) if crop.ndim == 3 else crop
+    luminance = float(grey.mean())
+
+    change = 0.0
+    if previous is not None and getattr(previous, "shape", None) == grey.shape:
+        change = float(np.abs(grey.astype("float32") - previous.astype("float32")).mean())
+
+    params = getattr(sensor, "params", None) or {}
+    lum_on = float(params.get("screen_lum", 90.0))
+    change_on = float(params.get("screen_change", 6.0))
+
+    on = luminance >= lum_on or change >= change_on
+    # Confidence rises with whichever signal is carrying the decision, so a
+    # borderline screen does not look as certain as an obvious one.
+    confidence = min(1.0, max(luminance / max(lum_on, 1.0),
+                              change / max(change_on, 1.0)) / 2.0) if on else 0.0
+    return {"present": on, "count": 1 if on else 0, "confidence": confidence,
+            "points": [], "luminance": round(luminance, 1),
+            "change": round(change, 2), "crop": grey}
+
+
+def _zone_crop(frame, sensor):
+    """The bounding box of the sensor's polygons, clipped to the frame."""
+    polys = getattr(sensor, "zone_polygons", None)
+    if frame is None or not polys:
+        return None
+    xs = [p[0] for poly in polys for p in poly]
+    ys = [p[1] for poly in polys for p in poly]
+    if not xs or not ys:
+        return None
+    h, w = frame.shape[:2]
+    x1 = max(0, int(min(xs)));  x2 = min(w, int(max(xs)) + 1)
+    y1 = max(0, int(min(ys)));  y2 = min(h, int(max(ys)) + 1)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return frame[y1:y2, x1:x2]
 
 
 def observe(kind: str, detections: list[Detection], sensor) -> dict:

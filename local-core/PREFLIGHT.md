@@ -256,6 +256,24 @@ around **where a person is, including the floor at their feet** — people are
 located by the bottom of their box, so a zone hugging a seat or a screen misses
 someone standing beside it.
 
+**TV screens (optional, and worth it).** With a screen zone attached, a station
+counts as in use only when somebody is there **and** its TV is on - so a person
+sitting on the sofa between games is not billed. Draw the stations first, then:
+
+```powershell
+.venv\Scripts\python.exe field_setup.py --source "rtsp://...channel=9..." --venue "Strikee Club" --mode screen --source-name "Gaming Camera A"
+```
+
+Draw around **the panel only** - no wall, no reflections - and name each polygon
+**exactly** like the station it belongs to (`Station 1`). It attaches to that
+asset instead of creating a new one; a name that matches nothing is skipped and
+reported.
+
+A screen reads as on when its zone is bright *or* changing, so a paused game
+(bright, still) and a dark game scene (dim, moving) both count. The exit window
+still applies, so a loading screen cannot end a session. Thresholds:
+`STRIKEE_SCREEN_LUM`, `STRIKEE_SCREEN_CHANGE`.
+
 **Do one station first and run it** before drawing the rest. If that one does
 not go Occupied when somebody sits there, five more zones will not either.
 

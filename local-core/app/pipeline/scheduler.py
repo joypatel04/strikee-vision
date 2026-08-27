@@ -28,7 +28,7 @@ from typing import Callable, Optional
 # 12-15s fits inside it.
 _SNOOKER_KIND = "snooker_game"
 _ENTRY_KINDS = {"footfall", "entry"}
-_PERSON_KINDS = {"occupancy", "presence", "person"}
+_PERSON_KINDS = {"occupancy", "presence", "person", "screen"}
 
 
 def source_intervals(
