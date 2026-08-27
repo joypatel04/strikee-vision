@@ -290,3 +290,27 @@ def test_append_only_tables_are_not_swept(wired):
     remote.statements.clear()
     push.push_once()
     assert remote.rows_for("events") == []
+
+
+def test_a_heartbeat_row_is_written_every_cycle(wired):
+    """The web app judges freshness on MAX(ts) FROM metric_samples, falling back
+    to events. On a quiet night neither moves, so a healthy box would read as
+    stale. One upserted row fixes that without pushing 2.4M rows a month."""
+    db, push, remote = wired
+    with db.cursor() as cur:
+        cur.execute("INSERT INTO organizations (id,name,created_at,updated_at) "
+                    "VALUES ('o','S','t','t')")
+        cur.execute("INSERT INTO venues (id,organization_id,name,created_at,updated_at) "
+                    "VALUES ('v1','o','S','t','t')")
+    push.push_once()
+
+    beats = [s for s in remote.statements if "metric_samples" in s["sql"]]
+    assert beats, "no heartbeat written"
+    assert beats[-1]["sql"].startswith("INSERT OR REPLACE"), "would grow forever"
+    assert any(a.get("value") == "sync-heartbeat" for a in beats[-1]["args"])
+
+
+def test_heartbeat_is_skipped_when_there_is_no_venue_yet(wired):
+    db, push, remote = wired
+    push.push_once()
+    assert not [s for s in remote.statements if "metric_samples" in s["sql"]]

@@ -288,6 +288,29 @@ class TursoPush:
                 self._write_cursor(key, {"ts": ts}, sent)
                 return sent
 
+    def _heartbeat(self) -> None:
+        """One row, rewritten each cycle, saying "sync is alive".
+
+        The web app judges freshness with MAX(ts) FROM metric_samples, falling
+        back to events. Neither works here: metric_samples is opt-in because it
+        is ~2.4M rows a month, and on a quiet night events do not move either -
+        so a perfectly healthy box would show as stale. A single row upserted
+        under a fixed id gives an honest signal at a cost of one write.
+        """
+        with self._db.cursor() as cur:
+            cur.execute("SELECT id FROM venues ORDER BY created_at LIMIT 1")
+            row = cur.fetchone()
+        if row is None:
+            return
+        self._pipeline([{
+            "sql": "INSERT OR REPLACE INTO metric_samples "
+                   "(id, venue_id, asset_id, business_unit_id, ts, metric, value) "
+                   "VALUES (?, ?, NULL, NULL, ?, ?, ?)",
+            "args": [_hrana_value("sync-heartbeat"), _hrana_value(row[0]),
+                     _hrana_value(_now_iso()), _hrana_value("sync_heartbeat"),
+                     _hrana_value(1.0)],
+        }])
+
     def push_once(self) -> dict:
         """One full cycle across every table. Never raises."""
         with self._lock:
@@ -299,6 +322,7 @@ class TursoPush:
                     pushed += self._push_updates(table, order_col)
                     if pushed:
                         stats[table] = pushed
+                self._heartbeat()
                 total = sum(stats.values())
                 self.rows_pushed += total
                 self.cycles += 1

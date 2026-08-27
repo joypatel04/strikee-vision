@@ -30,7 +30,11 @@ class BackupConfig:
     bucket: Optional[str] = None
     endpoint: Optional[str] = None
     prefix: str = "strikee"
-    region: str = "auto"
+    # "auto" is a Cloudflare R2 convention and NOT a valid AWS region - boto3
+    # would try s3.auto.amazonaws.com. Default to it only when an endpoint says
+    # we are talking to something R2-shaped; on real AWS leave it unset and let
+    # boto3 resolve from AWS_DEFAULT_REGION.
+    region: Optional[str] = None
 
     @property
     def enabled(self) -> bool:
@@ -42,7 +46,8 @@ class BackupConfig:
             bucket=os.environ.get("STRIKEE_BACKUP_BUCKET"),
             endpoint=os.environ.get("STRIKEE_BACKUP_ENDPOINT"),
             prefix=os.environ.get("STRIKEE_BACKUP_PREFIX", "strikee"),
-            region=os.environ.get("STRIKEE_BACKUP_REGION", "auto"),
+            region=(os.environ.get("STRIKEE_BACKUP_REGION")
+                    or ("auto" if os.environ.get("STRIKEE_BACKUP_ENDPOINT") else None)),
         )
 
 
@@ -62,9 +67,19 @@ def snapshot_db(db_path: str, dest_path: str) -> str:
 
 def _client(cfg: BackupConfig):
     import boto3  # lazy, optional dependency
-    kwargs = {"region_name": cfg.region}
+    kwargs = {}
+    if cfg.region:
+        kwargs["region_name"] = cfg.region
     if cfg.endpoint:
         kwargs["endpoint_url"] = cfg.endpoint
+    try:
+        from botocore.config import Config
+        # A backup must never be the reason the venue box stalls; boto3's 60s
+        # defaults are far too patient for a background task.
+        kwargs["config"] = Config(connect_timeout=10, read_timeout=60,
+                                  retries={"max_attempts": 2, "mode": "standard"})
+    except Exception:
+        pass
     return boto3.client("s3", **kwargs)
 
 

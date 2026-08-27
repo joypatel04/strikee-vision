@@ -47,9 +47,13 @@ def _maybe_start_backup(db_path: str):
     period = max(60.0, float(every) * 60.0)
 
     async def _loop():
+        # One backup soon after start, then on the period. Otherwise a box set
+        # up and then lost before the first interval elapses has no copy of the
+        # config someone just spent an evening drawing.
+        await asyncio.sleep(90)
         while True:
-            await asyncio.sleep(period)
             await asyncio.to_thread(run_once, db_path, cfg)
+            await asyncio.sleep(period)
 
     return asyncio.get_event_loop().create_task(_loop())
 

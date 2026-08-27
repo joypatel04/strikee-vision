@@ -329,7 +329,52 @@ from.
 
 ---
 
-## 9. Unattended — only once step 8 looks right
+## 9. Prove you never have to set up twice
+
+Everything you are about to draw lives in `strikee.db`. Losing it means
+redrawing every polygon, so make the copies real before you need them.
+
+**Two independent copies, and they answer different questions:**
+
+| | What it gives you |
+|---|---|
+| **Turso push** (`STRIKEE_SYNC_MODE=push`) | Live data queryable from anywhere - what the web app reads. Includes the config, so a rebuild can be reconstructed. |
+| **S3 file backup** (`STRIKEE_BACKUP_BUCKET`) | The whole database as one file. Restoring is a single command and brings back config *and* history exactly. |
+
+Add to `.env`:
+
+```ini
+STRIKEE_BACKUP_BUCKET=strikee-backups
+STRIKEE_BACKUP_EVERY_MIN=30
+```
+
+Credentials and region are shared with the snapshot upload. The first backup is
+written about 90 seconds after startup, so a box set up and then lost the same
+evening still has a copy.
+
+**Then verify it - this is the step people skip.** A backup nobody has restored
+is a hope, not a backup:
+
+```powershell
+.venv\Scripts\python.exe tools\restore.py --list
+.venv\Scripts\python.exe tools\restore.py --verify
+```
+
+`--verify` downloads the latest, runs an integrity check and confirms it actually
+contains a venue with assets, zones and sensors. It changes nothing. Wait for
+**RESTORABLE**.
+
+**If the PC ever dies:** install the stack on the new box (steps 1-3), put the
+same `.env` in place, then:
+
+```powershell
+.venv\Scripts\python.exe tools\restore.py --yes
+```
+
+Your venue, tables, stations, zones and history come back in one step. The old
+database is moved aside rather than overwritten.
+
+## 10. Unattended — only once step 8 looks right
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File packaging\install-autostart.ps1
