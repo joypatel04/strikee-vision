@@ -39,10 +39,15 @@ function Bad  ($m) { Write-Host "  FAIL  $m" -ForegroundColor Red }
 function Step ($m) { Write-Host "`n$m" -ForegroundColor Cyan }
 
 # --- administrator? -----------------------------------------------------------
+# Only the scheduled tasks and powercfg need elevation. Writing a line to .env
+# and dropping a shortcut on the desktop do not, and demanding admin for them
+# turns a thirty-second job into a "how do I open this as administrator" job.
 $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+$isAdmin   = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin -and -not $ShortcutOnly) {
     Bad "Run this in PowerShell started with 'Run as administrator'."
+    Write-Host "  (or use -ShortcutOnly, which needs no elevation)" -ForegroundColor DarkGray
     exit 1
 }
 
