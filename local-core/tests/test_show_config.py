@@ -166,3 +166,17 @@ def test_a_snooker_camera_gets_one_command_per_mode(tmp_path):
     assert "--mode snooker_game" in section
     assert "--mode occupancy" in section
     assert "--with-screen" not in section
+
+
+def test_suggested_commands_name_the_real_interpreter(configured):
+    """A bare "python" resolves to whatever is first on PATH - on Windows the
+    system install, which has none of the app's dependencies. The command then
+    dies on `from app.entities import REGISTRY` with "No module named
+    'pydantic'", which looks nothing like "you used the wrong python"."""
+    out = _run(configured)
+    line = next(l for l in out.splitlines() if "field_setup.py" in l).strip()
+    interpreter = line.split(" field_setup.py")[0]
+    assert interpreter not in ("python", "python3"), (
+        f"suggests a bare interpreter: {line}")
+    assert ".venv" in interpreter or interpreter.endswith(("python", "python.exe")), \
+        f"unexpected interpreter: {interpreter}"

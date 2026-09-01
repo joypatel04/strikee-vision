@@ -132,6 +132,16 @@ def main() -> int:
         print("    Fix with: python tools/rename_cameras.py --auto")
         print("    (tracking is unaffected - a camera is identified by its url)")
 
+    # Print the interpreter actually running this, not a bare "python". On
+    # Windows that resolves to whatever is first on PATH - usually the system
+    # install, which has none of the app's dependencies - and the command fails
+    # on `from app.entities import REGISTRY` for reasons that look unrelated.
+    exe = Path(sys.executable)
+    try:
+        py = str(exe.relative_to(Path.cwd()))
+    except ValueError:
+        py = str(exe)
+
     # The point of the listing: knowing what to type next.
     print("""
 To improve a zone, redraw it in place - the asset keeps its id, so its
@@ -144,7 +154,7 @@ sessions, games and any screen sensor survive:""")
         if not modes:
             continue
         venue_name = next(v["name"] for v in venues if v["id"] == src["venue_id"])
-        base = (f'python field_setup.py --redraw --venue "{venue_name}" '
+        base = (f'{py} field_setup.py --redraw --venue "{venue_name}" '
                 f'--source-name "{src["name"]}"')
 
         # A camera carrying both a person zone and a screen zone is redrawn in
