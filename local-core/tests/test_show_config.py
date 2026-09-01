@@ -53,11 +53,13 @@ def test_never_prints_the_password(configured):
     assert "***" in out
 
 
-def test_suggests_a_redraw_command_per_camera_and_mode(configured):
+def test_suggests_a_redraw_command_per_camera(configured):
+    """One command per camera - paired where the camera has screens, one per
+    mode where it does not."""
     out = _run(configured)
-    assert '--redraw --mode occupancy' in out
-    assert '--redraw --mode screen' in out
     assert '--source-name "Gaming Camera A"' in out
+    assert '--with-screen --mode occupancy' in out      # the gaming camera
+    assert '--mode snooker_game' in out                 # the snooker camera
 
 
 def test_the_suggested_command_carries_no_url(configured):
