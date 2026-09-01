@@ -141,12 +141,28 @@ sessions, games and any screen sensor survive:""")
             continue
         modes = sorted({s.get("type") for s in sensors
                         if s.get("video_source_id") == src["id"]} - {None})
-        for mode in modes:
-            venue_name = next(v["name"] for v in venues
-                              if v["id"] == src["venue_id"])
-            print(f"\n  {src['name']} / {mode}:")
-            print(f"    python field_setup.py --redraw --mode {mode} "
-                  f"--venue \"{venue_name}\" --source-name \"{src['name']}\"")
+        if not modes:
+            continue
+        venue_name = next(v["name"] for v in venues if v["id"] == src["venue_id"])
+        base = (f'python field_setup.py --redraw --venue "{venue_name}" '
+                f'--source-name "{src["name"]}"')
+
+        # A camera carrying both a person zone and a screen zone is redrawn in
+        # ONE pass: --with-screen asks for the seating area and then that
+        # station's TV, so the name is typed once and cannot mismatch.
+        person_mode = next((m for m in modes if m in ("occupancy", "presence",
+                                                      "person")), None)
+        if person_mode and "screen" in modes:
+            print(f"\n  {src['name']}  (stations and their screens, one pass):")
+            print(f"    {base} --with-screen --mode {person_mode}")
+            leftover = [m for m in modes if m not in (person_mode, "screen")]
+        else:
+            leftover = modes
+
+        for mode in leftover:
+            print(f"\n  {src['name']}  ({mode}):")
+            print(f"    {base} --mode {mode}")
+
     print("\n  Name each replacement polygon exactly as listed above.")
     print("  The camera is looked up by name, so no url or password is typed -")
     print("  which also keeps it out of your shell history and any screenshot.")

@@ -133,3 +133,34 @@ def test_renaming_resolves_the_ambiguity(tmp_path):
     uri = source_uri_by_name(db, "Strikee Club", "Channel 12")
     assert uri and "channel=12" in uri
     assert "DUPLICATE NAMES" not in _run(db)
+
+
+def test_a_camera_with_screens_gets_one_paired_command(tmp_path):
+    """Suggesting two separate redraws for a gaming camera means naming each
+    screen to match its station again - which --with-screen exists to avoid."""
+    db = str(tmp_path / "g.db")
+    write_config(db, BASE.format(c=9), "Strikee Club", "Gaming Camera A",
+                 "Gaming Lounge", "Gaming Station",
+                 [{"name": "RED", "polygon": POLY, "kind": "asset"},
+                  {"name": "RED", "polygon": POLY, "kind": "screen"}],
+                 mode="occupancy")
+    out = _run(db)
+    section = out[out.index("To improve a zone"):]
+    assert "--with-screen --mode occupancy" in section
+    assert "--mode screen" not in section, "still suggesting a separate screen pass"
+
+
+def test_a_snooker_camera_gets_one_command_per_mode(tmp_path):
+    """Table 4 is watched two ways on one camera; each needs its own redraw
+    because there is no screen to pair with."""
+    db = str(tmp_path / "s.db")
+    write_config(db, BASE.format(c=6), "Strikee Club", "Channel 6", "Snooker",
+                 "Snooker Table", [{"name": "T4", "polygon": POLY}])
+    write_config(db, BASE.format(c=6), "Strikee Club", "Channel 6", "Snooker",
+                 "Snooker Table", [{"name": "T4", "polygon": POLY}],
+                 mode="occupancy", attach=True)
+    section = _run(db)
+    section = section[section.index("To improve a zone"):]
+    assert "--mode snooker_game" in section
+    assert "--mode occupancy" in section
+    assert "--with-screen" not in section
