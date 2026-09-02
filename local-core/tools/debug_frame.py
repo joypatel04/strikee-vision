@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -50,6 +51,102 @@ def _aspect(raw):
         return None
 
 
+def _screen_thresholds(params) -> tuple[float, float]:
+    """Same precedence the observer uses: per-sensor params, then env, then default."""
+    params = params or {}
+    return (float(params.get("screen_lum",
+                             os.environ.get("STRIKEE_SCREEN_LUM", 90.0))),
+            float(params.get("screen_change",
+                             os.environ.get("STRIKEE_SCREEN_CHANGE", 6.0))))
+
+
+def watch_screens(sources, by_source, zones, assets, seconds: float,
+                  gap: float) -> int:
+    """Measure what the screen zones actually read, instead of guessing.
+
+    A threshold picked from one reading is a coin flip: the number you happen to
+    see may be the brightest frame of a dark game or the dimmest frame of a
+    bright one. What matters is the SEPARATION between a TV that is on and the
+    same TV off, and you only see that by watching each for a while.
+
+    Run it twice - once with the TVs on, once with them off - and put the
+    threshold in the gap between the two ranges.
+    """
+    from app.pipeline.capture import grab_once
+    from app.pipeline.observe import SCREEN_KIND, observe_screen
+
+    targets = [(src, s) for src in sources
+               for s in by_source.get(src["id"], [])
+               if s["type"] == SCREEN_KIND]
+    if not targets:
+        print("No screen sensors configured - nothing to watch.")
+        return 2
+
+    lums: dict = {}
+    changes: dict = {}
+    prev: dict = {}
+    print(f"Sampling {len(targets)} screen zone(s) for {seconds:g}s. "
+          f"Leave the TVs exactly as they are.\n")
+
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        for src, sensor in targets:
+            ok, frame = grab_once(src["uri"])
+            if not ok or frame is None:
+                continue
+
+            class S:
+                zone_polygons = (zones.get(sensor["zone_id"]) or {}).get("polygons") or []
+                conf_threshold = sensor.get("conf_threshold") or 0.35
+                params = sensor.get("params") or {}
+
+            obs = observe_screen(frame, S(), previous=prev.get(sensor["id"]))
+            had_prev = prev.get(sensor["id"]) is not None
+            prev[sensor["id"]] = obs.get("crop")
+            lums.setdefault(sensor["id"], []).append(obs["luminance"])
+            if had_prev:
+                changes.setdefault(sensor["id"], []).append(obs["change"])
+            print(".", end="", flush=True)
+        if gap:
+            time.sleep(gap)
+    print("\n")
+
+    def span(vals):
+        if not vals:
+            return "no samples"
+        vals = sorted(vals)
+        mid = vals[len(vals) // 2]
+        return f"min {vals[0]:>6.1f}   median {mid:>6.1f}   max {vals[-1]:>6.1f}"
+
+    for src, sensor in targets:
+        name = assets[sensor["asset_id"]]["name"]
+        lum_on, change_on = _screen_thresholds(sensor.get("params"))
+        mine = lums.get(sensor["id"], [])
+        print(f"{name}  ({src['name']})   {len(mine)} samples")
+        print(f"    lum     {span(mine)}      threshold {lum_on:g}")
+        print(f"    change  {span(changes.get(sensor['id'], []))}      "
+              f"threshold {change_on:g}")
+        if mine:
+            would_be_on = sum(
+                1 for i, v in enumerate(mine)
+                if v >= lum_on
+                or (i < len(changes.get(sensor["id"], []))
+                    and changes[sensor["id"]][i] >= change_on))
+            print(f"    reads ON {would_be_on}/{len(mine)} of the time at these "
+                  f"thresholds")
+        print()
+
+    print("""How to use these numbers: run this once with the TVs ON and again
+with them OFF, and set the threshold in the gap between the two ranges - not at
+the edge of either. Put it in .env as STRIKEE_SCREEN_LUM (and STRIKEE_SCREEN_CHANGE
+if change separates them better than brightness does).
+
+If the two ranges OVERLAP, brightness cannot tell the TV apart from the room:
+lean on change instead, or redraw the zone tighter around the panel so the wall
+around it stops diluting the average.""")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -57,6 +154,14 @@ def main() -> int:
     ap.add_argument("--source", help="only this camera, by name")
     ap.add_argument("--db", default=os.environ.get("STRIKEE_DB", "strikee.db"))
     ap.add_argument("--out", default="debug_frames")
+    ap.add_argument("--gap", type=float, default=1.5,
+                    help="seconds between the two frames used to measure "
+                         "screen change (default 1.5)")
+    ap.add_argument("--watch", type=float, metavar="SECONDS",
+                    help="instead of rendering, sample every screen zone for "
+                         "this long and report the range of lum/change - run "
+                         "it once with the TVs on and once with them off to "
+                         "pick a threshold from data")
     ap.add_argument("--aspect", default=os.environ.get("STRIKEE_PERSON_ASPECT"))
     args = ap.parse_args()
 
@@ -98,6 +203,12 @@ def main() -> int:
     for s in sensors:
         by_source.setdefault(s["video_source_id"], []).append(s)
 
+    # Measuring screens needs no model at all, so branch before loading one -
+    # on this hardware that import alone costs more than the whole measurement.
+    if args.watch:
+        return watch_screens(sources, by_source, zones, assets,
+                             args.watch, args.gap)
+
     kinds = {s["type"] for s in sensors}
     person_det = snooker_det = None
     print("Loading models...")
@@ -122,6 +233,20 @@ def main() -> int:
         if not mine:
             continue
         print(f"\n=== {src['name']} ===")
+
+        # A screen is called on when it is bright OR when it changed since the
+        # last look. One frame can only answer the first half, so this tool used
+        # to report change=0 for every TV and judge them on brightness alone -
+        # strictly harsher than the pipeline, which does have a previous frame.
+        # Grab an earlier frame first so both halves are real.
+        prev_frame = None
+        if any(s["type"] == SCREEN_KIND for s in mine):
+            okp, prev_frame = grab_once(src["uri"])
+            if not okp:
+                prev_frame = None
+            else:
+                time.sleep(args.gap)
+
         ok, frame = grab_once(src["uri"])
         if not ok or frame is None:
             print("  OFFLINE - could not grab a frame")
@@ -153,10 +278,17 @@ def main() -> int:
                 params = sensor.get("params") or {}
 
             if kind == SCREEN_KIND:
-                obs = observe_screen(frame, S())
+                before = (observe_screen(prev_frame, S())["crop"]
+                          if prev_frame is not None else None)
+                obs = observe_screen(frame, S(), previous=before)
                 verdict = obs["present"]
-                detail = (f"lum={obs['luminance']} (on at >= "
-                          f"{S.params.get('screen_lum', os.environ.get('STRIKEE_SCREEN_LUM', 90))})")
+                lum_on, change_on = _screen_thresholds(S.params)
+                if before is None:
+                    detail = (f"lum={obs['luminance']} (on at >={lum_on:g})  "
+                              f"change=UNMEASURED - brightness only")
+                else:
+                    detail = (f"lum={obs['luminance']} (>={lum_on:g})  "
+                              f"change={obs['change']} (>={change_on:g})")
             else:
                 dets = balls if kind == SNOOKER_KIND else people
                 obs = observe(kind, dets, S())

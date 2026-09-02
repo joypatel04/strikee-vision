@@ -47,6 +47,9 @@ def _shift(iso: str, seconds: float) -> str:
         return iso
 
 
+_NEVER_ON = 1 << 30   # 'has not been on within any hold window'
+
+
 @dataclass
 class _AssetState:
     presence: str = PRESENCE_UNKNOWN
@@ -59,6 +62,10 @@ class _AssetState:
     absent_streak: int = 0
     activity_still: int = 0
     presence_since: str = ""     # when presence ACTUALLY changed, best estimate
+    # Consecutive reads with every screen dark. Starts 'cold' - a screen not
+    # yet seen on has no hold to spend, so a sofa in front of a dead TV is
+    # never billed for the grace window.
+    screen_off_streak: int = _NEVER_ON
 
 
 class StateEngine:
@@ -66,7 +73,7 @@ class StateEngine:
                  support_high_conf: float = 0.6, activity_still_ticks: int = 3,
                  clock=_now, enter_sec: float | None = None,
                  exit_sec: float | None = None, still_sec: float | None = None,
-                 interval_for=None):
+                 interval_for=None, screen_hold_ticks: int = 2):
         self.enter_ticks = enter_ticks
         self.exit_ticks = exit_ticks
         self.support_high_conf = support_high_conf
@@ -78,6 +85,9 @@ class StateEngine:
         self.exit_sec = exit_sec
         self.still_sec = still_sec
         self.interval_for = interval_for   # callable(asset) -> seconds | None
+        # How many consecutive dark reads a screen gets before it closes the
+        # gate. See _screen_allows for why this is not zero.
+        self.screen_hold_ticks = screen_hold_ticks
         self._states: dict[str, _AssetState] = {}
 
     def snapshot(self, asset: AssetRuntime) -> AssetSnapshot:
@@ -129,13 +139,9 @@ class StateEngine:
                 except Exception:
                     interval = None
             raw_present, conf = self._fuse_presence(occ_sensors, raw_by_sensor, source_ok)
-            if screen_sensors and raw_present:
-                screen_on = any(
-                    raw_by_sensor.get(s.id, _NO_OBS).present
-                    for s in screen_sensors
-                    if source_ok.get(s.source_id, False))
-                if not screen_on:
-                    raw_present = False
+            if screen_sensors:
+                raw_present = self._screen_allows(st, screen_sensors, raw_by_sensor,
+                                                  source_ok, raw_present)
             self._smooth_presence(st, raw_present, enter_ticks, exit_ticks, interval)
             st.confidence = conf
 
@@ -234,6 +240,39 @@ class StateEngine:
             [obs(s).confidence for s in primaries], default=0.0
         )
         return present, conf
+
+    def _screen_allows(self, st: _AssetState, screen_sensors, raw_by_sensor,
+                       source_ok, raw_present: bool) -> bool:
+        """The TV gate, with a short hold on the last 'on' reading.
+
+        A station counts as occupied only while its screen is on, which is what
+        separates someone playing from someone resting on the sofa. But 'on' is
+        read from one still frame - bright enough, or different enough from the
+        last frame - and a television that is genuinely on fails both tests
+        several times an hour: a dark level, a loading screen, a fade between
+        cutscenes.
+
+        Closing the gate on the first dark read does more damage than it looks.
+        It does not merely mark the station free for one read; because presence
+        needs `enter_ticks` CONSECUTIVE present reads, a screen flickering
+        around the threshold resets the streak every time and the station never
+        opens at all - even with the player detected in every single frame.
+
+        So a dark read is only believed once it repeats. The streak advances on
+        every tick, occupied or not, so an empty station with its TV off cannot
+        bank grace for the next person to arrive.
+        """
+        screen_on = any(
+            raw_by_sensor.get(s.id, _NO_OBS).present
+            for s in screen_sensors
+            if source_ok.get(s.source_id, False))
+        if screen_on:
+            st.screen_off_streak = 0
+        else:
+            st.screen_off_streak += 1
+        if raw_present and st.screen_off_streak > self.screen_hold_ticks:
+            return False
+        return raw_present
 
     def _smooth_presence(self, st: _AssetState, raw_present: bool,
                          enter_ticks: int, exit_ticks: int,

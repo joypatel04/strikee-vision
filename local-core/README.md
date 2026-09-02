@@ -156,6 +156,7 @@ station after 15. Seconds are converted per asset from its own rate, so 120 mean
 |---|---|---|
 | `STRIKEE_SCREEN_LUM` | `90` | Brightness in a screen zone counting as "on". |
 | `STRIKEE_SCREEN_CHANGE` | `6` | Frame-to-frame change counting as "on". |
+| `STRIKEE_SCREEN_HOLD_TICKS` | `2` | Consecutive dark reads forgiven before the screen closes the station. A screen never yet seen on gets no hold. |
 
 A station with a screen zone is in use only when someone is there **and** the TV
 is on. Either signal suffices: a paused game is bright and still, a dark game

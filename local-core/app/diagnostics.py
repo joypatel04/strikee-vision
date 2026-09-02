@@ -59,6 +59,8 @@ _KNOBS: list[tuple[str, Optional[str], Callable[[str], Any], str, str]] = [
      "Brightness in a screen zone that counts as the TV being on."),
     ("STRIKEE_SCREEN_CHANGE", "6", float, "state",
      "Frame-to-frame change in a screen zone that counts as the TV being on."),
+    ("STRIKEE_SCREEN_HOLD_TICKS", "2", int, "state",
+     "Dark reads a screen is forgiven before it closes the station."),
     # snooker
     ("STRIKEE_RACK_REDS", "8", int, "snooker",
      "Reds that constitute a fresh rack."),

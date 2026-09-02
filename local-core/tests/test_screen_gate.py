@@ -124,14 +124,55 @@ def test_screen_on_with_nobody_there_is_not_in_use():
 
 
 def test_a_single_screen_dropout_does_not_end_the_session():
-    """The exit window still applies, so a loading screen cannot free a station."""
-    engine = StateEngine(enter_ticks=2, exit_ticks=5)
+    """A dark screen must survive the hold AND the exit window to free a station.
+
+    Two windows apply in series: the screen holds its last 'on' for
+    screen_hold_ticks reads, and only then does presence start its exit_ticks
+    countdown. So the station frees after hold + exit dark reads, not exit.
+    """
+    hold, exit_ticks = 2, 5
+    engine = StateEngine(enter_ticks=2, exit_ticks=exit_ticks,
+                         screen_hold_ticks=hold)
     asset = _station()
     _drive(engine, asset, person=True, screen=True, ticks=4)
-    snap = _drive(engine, asset, person=True, screen=False, ticks=2)
-    assert snap.presence == "present", "one dark frame ended the session"
-    snap = _drive(engine, asset, person=True, screen=False, ticks=4)
+
+    snap = _drive(engine, asset, person=True, screen=False, ticks=hold)
+    assert snap.presence == "present", "a loading screen ended the session"
+
+    # one short of the full window, still theirs
+    snap = _drive(engine, asset, person=True, screen=False, ticks=exit_ticks - 1)
+    assert snap.presence == "present", "freed before the window elapsed"
+
+    snap = _drive(engine, asset, person=True, screen=False, ticks=1)
     assert snap.presence == "absent", "screen off for the whole window must end it"
+
+
+def test_a_screen_never_seen_on_gets_no_hold():
+    """The hold remembers an 'on' reading; it does not grant one.
+
+    Otherwise the first few reads of every dark station would count as occupied,
+    which is exactly the sofa-in-front-of-a-dead-TV case the gate exists to
+    exclude - and it would bill it on every restart.
+    """
+    engine = StateEngine(enter_ticks=1, exit_ticks=1, screen_hold_ticks=5)
+    snap = _drive(engine, _station(), person=True, screen=False, ticks=1)
+    assert snap.presence != "present", "cold screen granted hold it never earned"
+
+
+def test_flickering_screen_still_opens_the_station():
+    """The regression this hold exists for.
+
+    Presence needs enter_ticks CONSECUTIVE present reads. A screen reading right
+    at its brightness threshold alternates on/off, and without a hold every dark
+    read reset that streak - so a station with the player detected in every
+    frame never opened at all.
+    """
+    engine = StateEngine(enter_ticks=2, exit_ticks=3, screen_hold_ticks=1)
+    asset = _station()
+    snap = None
+    for i in range(6):
+        snap = _drive(engine, asset, person=True, screen=(i % 2 == 0), ticks=1)
+    assert snap.presence == "present", "flickering screen never opened the station"
 
 
 def test_a_station_without_a_screen_sensor_is_unaffected():
