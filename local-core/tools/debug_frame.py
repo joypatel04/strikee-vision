@@ -221,22 +221,61 @@ def _pool(report: dict, metric: str):
             "max": max(s["max"] for s in spans)}
 
 
-def _print_picks(usable: dict) -> None:
-    if usable:
-        print("Put these in .env - the most conservative value across cameras:\n")
-        for env, picks in usable.items():
-            print(f"    {env}={max(picks)}")
-        print("""
-A screen counts as on if it is bright, OR moving, OR structured AND coloured -
-so a signal that overlaps does no harm as long as one of the others separates.""")
-    else:
-        print("""No signal separated on from off.
+def _as_list(v):
+    return v if isinstance(v, list) else [v]
 
-That usually means the zone takes in more than the panel: wall, a window, or a
-reflection on the bezel dilutes every statistic toward the room. Redraw it
-tight to the screen itself:
+
+def _print_picks(usable: dict, inverted: dict | None = None,
+                 safety: dict | None = None) -> None:
+    inverted, safety = inverted or {}, safety or {}
+    if usable or inverted or safety:
+        print("Put ALL of these in .env - the ones set to 'off' matter as much "
+              "as the\nthresholds, because a signal left at a default that sits "
+              "inside the off\nrange announces an idle screen as playing:\n")
+        for env, picks in usable.items():
+            print(f"    {env}={max(_as_list(picks))}")
+        for env, picks in safety.items():
+            print(f"    {env}={max(_as_list(picks))}")
+        for env, metric in inverted.items():
+            print(f"    {env}=off")
+        print("""
+A screen reads on if ANY signal fires, so every threshold has to be clear of the
+off range - one that is not will hold stations open all night on its own.""")
+
+    if not usable:
+        print("""
+WARNING: no signal cleanly separated on from off. The settings above keep an
+idle screen from reading as playing, but nothing reliably recognises a screen
+that IS on, so stations will under-report.
+
+That usually means the zone takes in more than the panel: wall, bezel, or a
+window dilutes every statistic toward the room. Redraw it tight to the screen:
 
     python field_setup.py --redraw --venue "..." --source-name "..." --mode screen""")
+
+
+def _verdict(on_span, off_span, env):
+    """How a signal behaves between the two groups, and what to set it to.
+
+    Three outcomes, and the middle one is the trap. A signal whose ranges
+    overlap cannot decide on its own - but leaving it at a default that sits
+    INSIDE the off range is not neutral, it is a false positive generator: an
+    off screen measured change 8.2 against a threshold of 6, so it announced
+    itself as playing. Overlapping signals therefore get a threshold above
+    everything seen while off, which makes them a safety net instead.
+
+    Inversion earns its own answer because the fix is the opposite of the
+    obvious one - not a different threshold, but switching the signal off.
+    """
+    if on_span["min"] > off_span["max"]:
+        gap = on_span["min"] - off_span["max"]
+        return "separates", round(off_span["max"] + gap / 2)
+    if off_span["min"] > on_span["max"]:
+        return "inverted", None
+    if on_span["max"] > off_span["max"]:
+        # Still worth keeping: it fires only above anything an idle screen did.
+        return "overlaps", round(off_span["max"]) + 2
+    return "useless", None
 
 
 def _recommend_across(on_report: dict, off_report: dict) -> None:
@@ -256,24 +295,31 @@ def _recommend_across(on_report: dict, off_report: dict) -> None:
     print("=" * 68 + "\n")
 
     usable: dict = {}
+    inverted: dict = {}
+    safety: dict = {}
     for metric, env in METRIC_ENVS:
         a, b = _pool(on_report, metric), _pool(off_report, metric)
         if not a or not b:
             print(f"    {metric:<11} not measured in both groups")
             continue
-        gap = a["min"] - b["max"]
-        if gap > 0:
-            pick = round(b["max"] + gap / 2)
+        how, pick = _verdict(a, b, env)
+        ranges = (f"    {metric:<11} on {a['min']:.0f}-{a['max']:.0f}  "
+                  f"off {b['min']:.0f}-{b['max']:.0f}   ")
+        if how == "separates":
             usable[env] = [pick]
-            print(f"    {metric:<11} on {a['min']:.0f}-{a['max']:.0f}  "
-                  f"off {b['min']:.0f}-{b['max']:.0f}   SEPARATES -> {env}={pick}")
+            print(ranges + f"SEPARATES -> {env}={pick}")
+        elif how == "inverted":
+            inverted[env] = metric
+            print(ranges + f"BACKWARDS - off scores higher -> {env}=off")
+        elif how == "overlaps":
+            safety[env] = pick
+            print(ranges + f"overlaps -> {env}={pick} (above the off range)")
         else:
-            print(f"    {metric:<11} on {a['min']:.0f}-{a['max']:.0f}  "
-                  f"off {b['min']:.0f}-{b['max']:.0f}   overlaps, "
-                  f"cannot decide alone")
+            inverted[env] = metric
+            print(ranges + f"never exceeds off -> {env}=off")
 
     print("\n" + "=" * 68)
-    _print_picks(usable)
+    _print_picks(usable, inverted, safety)
     print("""
 Measured across different televisions, so confirm it when the room is empty:
 
@@ -291,6 +337,8 @@ def _recommend(on_report: dict, off_report: dict) -> None:
     print("ON vs OFF")
     print("=" * 68)
     usable: dict = {}
+    inverted: dict = {}
+    safety: dict = {}
     for sensor_id, on in on_report.items():
         off = off_report.get(sensor_id)
         if not off:
@@ -301,21 +349,24 @@ def _recommend(on_report: dict, off_report: dict) -> None:
             if not a or not b:
                 print(f"    {metric:<11} not measured in both runs")
                 continue
-            # ON must clear OFF's ceiling for the signal to separate them.
-            gap = a["min"] - b["max"]
-            if gap > 0:
-                pick = round(b["max"] + gap / 2)
+            how, pick = _verdict(a, b, env)
+            ranges = (f"    {metric:<11} on {a['min']:.0f}-{a['max']:.0f}  "
+                      f"off {b['min']:.0f}-{b['max']:.0f}   ")
+            if how == "separates":
                 usable.setdefault(env, []).append(pick)
-                print(f"    {metric:<11} on {a['min']:.0f}-{a['max']:.0f}  "
-                      f"off {b['min']:.0f}-{b['max']:.0f}   "
-                      f"SEPARATES -> {env}={pick}")
+                print(ranges + f"SEPARATES -> {env}={pick}")
+            elif how == "inverted":
+                inverted[env] = metric
+                print(ranges + f"BACKWARDS - off scores higher -> {env}=off")
+            elif how == "overlaps":
+                safety.setdefault(env, []).append(pick)
+                print(ranges + f"overlaps -> {env}={pick} (above the off range)")
             else:
-                print(f"    {metric:<11} on {a['min']:.0f}-{a['max']:.0f}  "
-                      f"off {b['min']:.0f}-{b['max']:.0f}   overlaps, "
-                      f"cannot decide alone")
+                inverted[env] = metric
+                print(ranges + f"never exceeds off -> {env}=off")
 
     print("\n" + "=" * 68)
-    _print_picks(usable)
+    _print_picks(usable, inverted, safety)
 
 
 def main() -> int:

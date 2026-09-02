@@ -155,8 +155,10 @@ station after 15. Seconds are converted per asset from its own rate, so 120 mean
 | Setting | Default | What it does |
 |---|---|---|
 | `STRIKEE_SCREEN_LUM` | `120` | Brightness counting as "on". Not `90`: an off panel reflecting room lights measured 92–97 at the venue. |
-| `STRIKEE_SCREEN_CONTRAST` | `28` | Spread of brightness across the zone. Content has structure; a reflection is a smooth wash. |
-| `STRIKEE_SCREEN_SAT` | `14` | Colour in the zone. Games are coloured; reflected room light is nearly grey. |
+| `STRIKEE_SCREEN_CONTRAST` | `off` | Spread of brightness across the zone. Off by default: measured at the venue it runs **backwards**, because these zones take in bezel and wall. Enable only if `--watch` says it separates. |
+| `STRIKEE_SCREEN_SAT` | `off` | Colour in the zone. Off by default for the same reason — a lamp reflected in a dark panel is colourful. |
+
+Any of these accepts `off` (or `none`) to disable that signal entirely. A screen reads on if **any** signal fires, so every enabled threshold must sit clear of what that zone reads while off — one that does not will hold a station open all night by itself. Per-sensor overrides live in the sensor's `params` (`{"screen_lum": 160}`) and beat the environment, which is how one awkward camera gets tightened without desensitising the rest.
 | `STRIKEE_SCREEN_CHANGE` | `6` | Frame-to-frame change counting as "on". |
 | `STRIKEE_SCREEN_HOLD_TICKS` | `2` | Consecutive dark reads forgiven before the screen closes the station. A screen never yet seen on gets no hold. |
 

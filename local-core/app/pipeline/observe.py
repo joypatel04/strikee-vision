@@ -72,6 +72,36 @@ def observe_snooker_game(detections: list[Detection], sensor) -> dict:
     }
 
 
+def screen_verdict(luminance, change, contrast, saturation,
+                   lum_on, change_on, contrast_on, sat_on):
+    """Decide on/off from the four statistics. Returns (on, reason, confidence).
+
+    Separate from the pixel work so a venue's measured numbers can be replayed
+    against it directly - which is the only way a set of thresholds can be shown
+    to classify every station correctly before anyone relies on it.
+
+    Any ONE signal is enough, except the last, which needs both halves:
+    structure without colour is a window reflected in a dark panel, colour
+    without structure is a wall. Together they are a picture.
+
+    Because any signal can carry the verdict on its own, every threshold has to
+    sit clear of what that zone reads while off. One that does not will hold a
+    station open all night by itself, no matter how well the others behave.
+    """
+    signals = (
+        ("bright", luminance >= lum_on, luminance / max(lum_on, 1.0)),
+        ("moving", change >= change_on, change / max(change_on, 1.0)),
+        ("picture", contrast >= contrast_on and saturation >= sat_on,
+         min(contrast / max(contrast_on, 1.0), saturation / max(sat_on, 1.0))),
+    )
+    fired = [(name, ratio) for name, ok, ratio in signals if ok]
+    if not fired:
+        return False, "off", 0.0
+    # Confidence follows whichever signal is carrying the decision, so a
+    # borderline screen does not look as certain as an obvious one.
+    return True, "+".join(n for n, _ in fired), min(1.0, max(r for _, r in fired) / 2.0)
+
+
 def observe_screen(frame, sensor, previous=None) -> dict:
     """present when the screen inside the zone is on.
 
@@ -129,31 +159,34 @@ def observe_screen(frame, sensor, previous=None) -> dict:
     params = getattr(sensor, "params", None) or {}
 
     def _p(key, env, default):
-        return float(params.get(key, os.environ.get(env, default)))
+        """A threshold, or infinity for a signal switched off.
 
-    # 120, not 90: an off panel reflecting room lighting measured 92-97 at the
+        Disabling matters because a signal can be not merely useless at a venue
+        but backwards. Measured across six stations here, the OFF screens scored
+        HIGHER contrast than the on ones - the zones take in bezel and wall, so a
+        dark panel against a lit room has more structure than a bright screen
+        showing a flat scene. A signal like that has to be removable, and
+        "set it to 9999" is not an instruction anyone should have to invent.
+        """
+        raw = params.get(key, os.environ.get(env, default))
+        if isinstance(raw, str) and raw.strip().lower() in ("off", "none", ""):
+            return float("inf")
+        return float(raw)
+
+    # 120, not 90: an off panel reflecting room lighting measured 92-97 at one
     # venue, so 90 called every dark TV "on" all evening.
     lum_on = _p("screen_lum", "STRIKEE_SCREEN_LUM", 120.0)
     change_on = _p("screen_change", "STRIKEE_SCREEN_CHANGE", 6.0)
-    contrast_on = _p("screen_contrast", "STRIKEE_SCREEN_CONTRAST", 28.0)
-    sat_on = _p("screen_sat", "STRIKEE_SCREEN_SAT", 14.0)
+    # Structure and colour are OFF by default. They are real signals, but the
+    # only venue we have measured says they invert there, and a heuristic that
+    # is wrong half the time is worse than one that is absent. Turn them on when
+    # a --watch comparison shows they separate.
+    contrast_on = _p("screen_contrast", "STRIKEE_SCREEN_CONTRAST", "off")
+    sat_on = _p("screen_sat", "STRIKEE_SCREEN_SAT", "off")
 
-    # Any ONE of these is enough, except the last, which needs both halves:
-    # structure without colour is a window reflection, and colour without
-    # structure is a wall. Together they are a picture.
-    signals = [
-        ("bright", luminance >= lum_on, luminance / max(lum_on, 1.0)),
-        ("moving", change >= change_on, change / max(change_on, 1.0)),
-        ("picture", contrast >= contrast_on and saturation >= sat_on,
-         min(contrast / max(contrast_on, 1.0), saturation / max(sat_on, 1.0))),
-    ]
-    fired = [(name, ratio) for name, ok, ratio in signals if ok]
-    on = bool(fired)
-
-    # Confidence follows whichever signal is carrying the decision, so a
-    # borderline screen does not look as certain as an obvious one.
-    confidence = min(1.0, max(r for _, r in fired) / 2.0) if on else 0.0
-    reason = "+".join(name for name, _ in fired) if on else "off"
+    on, reason, confidence = screen_verdict(
+        luminance, change, contrast, saturation,
+        lum_on, change_on, contrast_on, sat_on)
 
     return {"present": on, "count": 1 if on else 0, "confidence": confidence,
             "points": [], "luminance": round(luminance, 1),

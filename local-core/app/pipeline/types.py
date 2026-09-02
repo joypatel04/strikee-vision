@@ -45,6 +45,10 @@ class SensorRuntime:
     role: str = ROLE_PRIMARY       # primary | supporting
     conf_threshold: float = 0.35
     zone_polygons: list = field(default_factory=list)  # [[[x,y],...], ...]
+    # Per-sensor overrides, e.g. {"screen_lum": 160}. One awkward camera - a TV
+    # with a lamp reflected in it - can be tightened without desensitising every
+    # other station to match it.
+    params: dict = field(default_factory=dict)
 
 
 @dataclass

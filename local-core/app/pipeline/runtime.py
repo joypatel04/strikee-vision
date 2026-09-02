@@ -76,10 +76,16 @@ def load_venue_config(db, venue_id: str) -> tuple[list[AssetRuntime], list[Sourc
     sensors_by_source: dict[str, list[SensorRuntime]] = {}
     for r in sensor_rows:
         polys = json.loads(r["zone_polygons"]) if r.get("zone_polygons") else []
+        raw_params = r.get("params")
+        if isinstance(raw_params, str):
+            try:
+                raw_params = json.loads(raw_params)
+            except ValueError:
+                raw_params = None
         sr = SensorRuntime(
             id=r["id"], asset_id=r["asset_id"], source_id=r.get("video_source_id"),
             kind=r["type"], role=r["role"], conf_threshold=r["conf_threshold"],
-            zone_polygons=polys,
+            zone_polygons=polys, params=raw_params or {},
         )
         sensors_by_asset.setdefault(sr.asset_id, []).append(sr)
         if sr.source_id:

@@ -19,6 +19,13 @@ class Sensor:
     params = {}
 
 
+class Picture(Sensor):
+    """Structure and colour switched on. Off by default because they invert at
+    the one venue we have measured; these tests cover the mechanism for a venue
+    whose --watch comparison says they separate."""
+    params = {"screen_contrast": 28.0, "screen_sat": 14.0}
+
+
 def _uniform(level, jitter=1.0, seed=0):
     """A smooth, grey wash - what an off panel reflecting the room looks like."""
     rng = np.random.default_rng(seed)
@@ -57,7 +64,7 @@ def test_off_panel_reflecting_the_room_is_not_on(monkeypatch):
 
 def test_a_dim_game_scene_is_on_despite_being_darker_than_the_reflection():
     """The other half of the overlap - and the reason a threshold cannot work."""
-    dim = _obs(_picture(70))
+    dim = observe_screen(_picture(70), Picture())
     assert dim["present"] is True, "a dark game scene read as off"
     assert "picture" in dim["reason"]
     # the point of the pair: the ON frame is DIMMER than the OFF one above
@@ -86,7 +93,7 @@ def test_structure_without_colour_is_not_a_picture():
     """A window reflected in a dark panel has edges but no colour."""
     frame = _uniform(80)
     frame[:, 40:60] = 200          # a bright grey stripe: high contrast, no hue
-    obs = _obs(frame)
+    obs = observe_screen(frame, Picture())
     assert obs["contrast"] > 28, "test frame lacks the structure it claims"
     assert obs["saturation"] < 14
     assert obs["present"] is False, "a grey reflection read as content"
@@ -96,7 +103,7 @@ def test_colour_without_structure_is_not_a_picture():
     """A flat coloured wall inside the zone is not a screen."""
     frame = np.zeros((H, W, 3), dtype=np.uint8)
     frame[:, :] = (30, 20, 90)     # uniform, saturated, dim
-    obs = _obs(frame)
+    obs = observe_screen(frame, Picture())
     assert obs["saturation"] > 14
     assert obs["contrast"] < 28
     assert obs["present"] is False
@@ -165,8 +172,11 @@ def test_recommender_rejects_the_signal_that_overlaps(capsys):
                 saturation=(2, 4, 7), change=(0, 1, 3)))
     out = capsys.readouterr().out
 
-    assert "luminance" in out and "overlaps" in out
-    assert "STRIKEE_SCREEN_LUM=" not in out, "recommended an overlapping signal"
+    lum_line = out.split("luminance")[1].split("\n")[0]
+    assert "overlaps" in lum_line
+    # An overlapping signal is not left at a default that sits inside the off
+    # range - that is what fires on an idle screen - it is pushed above it.
+    assert "STRIKEE_SCREEN_LUM=99" in lum_line, "overlapping signal left unsafe"
     assert "STRIKEE_SCREEN_CONTRAST=" in out
     assert "STRIKEE_SCREEN_SAT=" in out
 
@@ -184,7 +194,8 @@ def test_no_separation_points_at_the_zone_not_the_numbers(capsys):
     _load_recommender()(_report(luminance=(80, 95, 110), contrast=(5, 9, 14)),
                         _report(luminance=(78, 96, 112), contrast=(4, 10, 15)))
     out = capsys.readouterr().out
-    assert "No signal separated" in out
+    assert "no signal cleanly separated" in out
+    assert "under-report" in out, "did not say what the consequence is"
     assert "--redraw" in out, "did not say what to actually do about it"
 
 
@@ -225,7 +236,6 @@ def test_stations_on_versus_stations_off_in_one_pass(capsys):
     out = capsys.readouterr().out
 
     assert "overlaps" in out.split("luminance")[1].split("\n")[0]
-    assert "STRIKEE_SCREEN_LUM=" not in out
     assert "STRIKEE_SCREEN_CONTRAST=" in out
     assert "STRIKEE_SCREEN_SAT=" in out
 
@@ -250,3 +260,134 @@ def test_it_says_the_evidence_is_weaker_than_a_two_state_run(capsys):
     out = capsys.readouterr().out
     assert "different televisions" in out
     assert "--state on" in out, "did not say how to confirm it properly"
+
+
+def test_a_signal_can_be_switched_off(monkeypatch):
+    """Not merely useless but backwards: measured over six stations at the
+    venue, the OFF screens scored higher contrast than the on ones."""
+    inverted = np.zeros((H, W, 3), dtype=np.uint8)
+    inverted[:, :] = (20, 15, 40)
+    inverted[:, 30:70] = (40, 230, 255)      # structured and saturated, but dim
+
+    monkeypatch.setenv("STRIKEE_SCREEN_CONTRAST", "28")
+    monkeypatch.setenv("STRIKEE_SCREEN_SAT", "14")
+    assert _obs(inverted)["present"] is True
+
+    monkeypatch.setenv("STRIKEE_SCREEN_CONTRAST", "off")
+    assert _obs(inverted)["present"] is False, "'off' did not disable the signal"
+
+    monkeypatch.setenv("STRIKEE_SCREEN_CONTRAST", "none")
+    assert _obs(inverted)["present"] is False
+
+
+def test_structure_and_colour_are_off_by_default(monkeypatch):
+    """The default must not resurrect the signal that got 3 of 6 stations wrong."""
+    for var in ("STRIKEE_SCREEN_CONTRAST", "STRIKEE_SCREEN_SAT",
+                "STRIKEE_SCREEN_LUM", "STRIKEE_SCREEN_CHANGE"):
+        monkeypatch.delenv(var, raising=False)
+    # Blue: an OFF station, measured lum 86.5, contrast 58.3, saturation 43.1.
+    frame = np.zeros((H, W, 3), dtype=np.uint8)
+    frame[:, :] = (20, 15, 40)
+    frame[:, 30:70] = (40, 230, 255)
+    obs = _obs(frame)
+    assert obs["contrast"] > 28 and obs["saturation"] > 14
+    assert obs["present"] is False, "picture signal is back on by default"
+
+
+# --------------------------------------------- the venue's measured stations
+
+
+# Six gaming stations, one 60s pass, states confirmed by the operator. Blue is
+# the awkward one: a lamp across the room reflects colour onto its dark panel,
+# which is why an OFF station reads saturation 41-49 and change 8.1-8.4.
+FIELD = {
+    #          luminance        change        contrast        saturation     on
+    "Mint":   ((204.7, 214.4), (11.0, 19.2), (34.4, 43.3), (33.0, 43.6), True),
+    "Yellow": ((215.0, 220.2), (4.2, 7.9), (17.6, 24.1), (47.0, 55.7), True),
+    "Orange": ((210.8, 230.4), (19.4, 26.4), (20.7, 39.6), (25.9, 38.2), True),
+    "Blue":   ((85.7, 87.1), (8.1, 8.4), (58.2, 58.9), (41.0, 48.6), False),
+    "LIME":   ((64.3, 66.8), (3.0, 3.3), (66.9, 67.5), (22.4, 24.6), False),
+    "Red":    ((55.2, 60.5), (2.2, 3.5), (71.0, 76.5), (23.0, 27.0), False),
+}
+
+# What --watch recommended from the pass above.
+VENUE = dict(lum_on=146.0, change_on=10.0, contrast_on=float("inf"),
+             sat_on=51.0)
+
+
+def _corners(station):
+    """Every combination of the measured extremes, not just the medians - a
+    setting that only holds at the median is not a setting."""
+    lum, change, contrast, sat, _ = station
+    for a in lum:
+        for b in change:
+            for c in contrast:
+                for d in sat:
+                    yield a, b, c, d
+
+
+def test_measured_settings_classify_every_station_correctly():
+    from app.pipeline.observe import screen_verdict
+    for name, station in FIELD.items():
+        expected = station[-1]
+        for lum, change, contrast, sat in _corners(station):
+            on, reason, _ = screen_verdict(lum, change, contrast, sat, **VENUE)
+            assert on is expected, (
+                f"{name}: expected {'on' if expected else 'off'}, got "
+                f"[{reason}] at lum={lum} change={change} contrast={contrast} "
+                f"sat={sat}")
+
+
+def test_the_defaults_would_have_got_half_the_stations_wrong():
+    """Why the venue needs measured settings rather than the shipped defaults.
+
+    The old contrast+saturation defaults fired on every OFF station, because
+    these zones take in bezel and wall: a dark panel against a lit room has more
+    structure than a bright screen showing a flat scene.
+    """
+    from app.pipeline.observe import screen_verdict
+    old = dict(lum_on=90.0, change_on=6.0, contrast_on=28.0, sat_on=14.0)
+    wrong = [name for name, station in FIELD.items()
+             if screen_verdict(*[sum(v) / 2 for v in station[:4]], **old)[0]
+             is not station[-1]]
+    assert sorted(wrong) == ["Blue", "LIME", "Red"], wrong
+
+
+def test_a_reflected_lamp_does_not_open_a_station_on_its_own():
+    """Blue, specifically: colour and change from a reflection, TV off."""
+    from app.pipeline.observe import screen_verdict
+    on, reason, _ = screen_verdict(87.1, 8.4, 58.9, 48.6, **VENUE)
+    assert on is False, f"a reflected lamp read as a TV that is on: {reason}"
+
+
+def test_per_sensor_params_reach_the_running_pipeline():
+    """Documented as the way to tighten one awkward camera, and it was dead: the
+    runtime sensor carried no params at all, so only the offline tool honoured
+    them."""
+    import json
+
+    from app.pipeline.types import SensorRuntime
+    assert SensorRuntime(id="s", asset_id="a", source_id="src",
+                         kind="screen").params == {}
+
+    from app.db import Database
+    from app.pipeline.runtime import load_venue_config
+    db = Database(":memory:")
+    try:
+        now = "2026-09-02T10:00:00+00:00"
+        with db.cursor() as cur:
+            cur.execute("INSERT INTO organizations (id, name, created_at, "
+                        "updated_at) VALUES ('o','O',?,?)", (now, now))
+            cur.execute("INSERT INTO venues (id, organization_id, name, timezone,"
+                        " created_at, updated_at) VALUES ('v','o','V','UTC',?,?)",
+                        (now, now))
+            cur.execute("INSERT INTO assets (id, venue_id, name, created_at, "
+                        "updated_at) VALUES ('a','v','Blue',?,?)", (now, now))
+            cur.execute("INSERT INTO sensors (id, asset_id, type, role, "
+                        "conf_threshold, enabled, params, created_at, updated_at) "
+                        "VALUES ('s','a','screen','primary',0.35,1,?,?,?)",
+                        (json.dumps({"screen_sat": 60}), now, now))
+        assets, _ = load_venue_config(db, "v")
+        assert assets[0].sensors[0].params == {"screen_sat": 60}
+    finally:
+        db.close()
