@@ -51,27 +51,37 @@ def _aspect(raw):
         return None
 
 
-def _screen_thresholds(params) -> tuple[float, float]:
+SCREEN_KNOBS = (
+    ("lum", "screen_lum", "STRIKEE_SCREEN_LUM", 120.0),
+    ("change", "screen_change", "STRIKEE_SCREEN_CHANGE", 6.0),
+    ("contrast", "screen_contrast", "STRIKEE_SCREEN_CONTRAST", 28.0),
+    ("sat", "screen_sat", "STRIKEE_SCREEN_SAT", 14.0),
+)
+
+
+def _screen_thresholds(params) -> dict:
     """Same precedence the observer uses: per-sensor params, then env, then default."""
     params = params or {}
-    return (float(params.get("screen_lum",
-                             os.environ.get("STRIKEE_SCREEN_LUM", 90.0))),
-            float(params.get("screen_change",
-                             os.environ.get("STRIKEE_SCREEN_CHANGE", 6.0))))
+    return {short: float(params.get(key, os.environ.get(env, default)))
+            for short, key, env, default in SCREEN_KNOBS}
 
 
 def watch_screens(sources, by_source, zones, assets, seconds: float,
-                  gap: float) -> int:
+                  gap: float, state: str | None, out_dir: str) -> int:
     """Measure what the screen zones actually read, instead of guessing.
 
     A threshold picked from one reading is a coin flip: the number you happen to
     see may be the brightest frame of a dark game or the dimmest frame of a
-    bright one. What matters is the SEPARATION between a TV that is on and the
-    same TV off, and you only see that by watching each for a while.
+    bright one. And at this venue brightness alone cannot do it at all - an OFF
+    panel reflecting room lights measured 92-97, overlapping what a dark game
+    scene reads when the TV is ON.
 
-    Run it twice - once with the TVs on, once with them off - and put the
-    threshold in the gap between the two ranges.
+    So measure both states and compare. Run it once with the TVs on and once
+    with them off, passing --state each time; the second run has the first to
+    compare against and prints the thresholds that separate them.
     """
+    import json
+
     from app.pipeline.capture import grab_once
     from app.pipeline.observe import SCREEN_KIND, observe_screen
 
@@ -82,11 +92,11 @@ def watch_screens(sources, by_source, zones, assets, seconds: float,
         print("No screen sensors configured - nothing to watch.")
         return 2
 
-    lums: dict = {}
-    changes: dict = {}
+    samples: dict = {}
     prev: dict = {}
-    print(f"Sampling {len(targets)} screen zone(s) for {seconds:g}s. "
-          f"Leave the TVs exactly as they are.\n")
+    label = f" with the TVs {state.upper()}" if state else ""
+    print(f"Sampling {len(targets)} screen zone(s) for {seconds:g}s{label}. "
+          f"Leave them exactly as they are.\n")
 
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -100,51 +110,129 @@ def watch_screens(sources, by_source, zones, assets, seconds: float,
                 conf_threshold = sensor.get("conf_threshold") or 0.35
                 params = sensor.get("params") or {}
 
-            obs = observe_screen(frame, S(), previous=prev.get(sensor["id"]))
             had_prev = prev.get(sensor["id"]) is not None
+            obs = observe_screen(frame, S(), previous=prev.get(sensor["id"]))
             prev[sensor["id"]] = obs.get("crop")
-            lums.setdefault(sensor["id"], []).append(obs["luminance"])
+            row = {k: obs[k] for k in ("luminance", "contrast", "saturation")}
             if had_prev:
-                changes.setdefault(sensor["id"], []).append(obs["change"])
+                row["change"] = obs["change"]
+            samples.setdefault(sensor["id"], []).append(row)
             print(".", end="", flush=True)
         if gap:
             time.sleep(gap)
     print("\n")
 
-    def span(vals):
+    def span(rows, key):
+        vals = sorted(r[key] for r in rows if key in r)
         if not vals:
-            return "no samples"
-        vals = sorted(vals)
-        mid = vals[len(vals) // 2]
-        return f"min {vals[0]:>6.1f}   median {mid:>6.1f}   max {vals[-1]:>6.1f}"
+            return None
+        return {"min": vals[0], "median": vals[len(vals) // 2], "max": vals[-1]}
 
+    METRICS = (("luminance", "lum"), ("contrast", "contrast"),
+               ("saturation", "sat"), ("change", "change"))
+
+    report = {}
     for src, sensor in targets:
+        rows = samples.get(sensor["id"], [])
         name = assets[sensor["asset_id"]]["name"]
-        lum_on, change_on = _screen_thresholds(sensor.get("params"))
-        mine = lums.get(sensor["id"], [])
-        print(f"{name}  ({src['name']})   {len(mine)} samples")
-        print(f"    lum     {span(mine)}      threshold {lum_on:g}")
-        print(f"    change  {span(changes.get(sensor['id'], []))}      "
-              f"threshold {change_on:g}")
-        if mine:
-            would_be_on = sum(
-                1 for i, v in enumerate(mine)
-                if v >= lum_on
-                or (i < len(changes.get(sensor["id"], []))
-                    and changes[sensor["id"]][i] >= change_on))
-            print(f"    reads ON {would_be_on}/{len(mine)} of the time at these "
-                  f"thresholds")
+        thresholds = _screen_thresholds(sensor.get("params"))
+        print(f"{name}  ({src['name']})   {len(rows)} samples")
+        stats = {}
+        for metric, short in METRICS:
+            sp = span(rows, metric)
+            stats[metric] = sp
+            if sp is None:
+                print(f"    {metric:<11} no samples")
+                continue
+            print(f"    {metric:<11} min {sp['min']:>7.1f}   "
+                  f"median {sp['median']:>7.1f}   max {sp['max']:>7.1f}"
+                  f"      threshold {thresholds[short]:g}")
+        report[sensor["id"]] = {"asset": name, "camera": src["name"],
+                                "samples": len(rows), "stats": stats}
         print()
 
-    print("""How to use these numbers: run this once with the TVs ON and again
-with them OFF, and set the threshold in the gap between the two ranges - not at
-the edge of either. Put it in .env as STRIKEE_SCREEN_LUM (and STRIKEE_SCREEN_CHANGE
-if change separates them better than brightness does).
+    if not state:
+        print("""Run this twice with --state so the two can be compared:
 
-If the two ranges OVERLAP, brightness cannot tell the TV apart from the room:
-lean on change instead, or redraw the zone tighter around the panel so the wall
-around it stops diluting the average.""")
+    --watch 60 --state on      (TVs on, as they normally are)
+    --watch 60 --state off     (TVs off)
+
+The second run prints the thresholds that separate them.""")
+        return 0
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"screen-{state}.json").write_text(json.dumps(report, indent=2),
+                                              encoding="utf-8")
+    other_state = "off" if state == "on" else "on"
+    other_path = out / f"screen-{other_state}.json"
+    if not other_path.exists():
+        print(f"Saved. Now run it again with --state {other_state}:\n")
+        print(f"    ... --watch {seconds:g} --state {other_state}\n")
+        return 0
+
+    other = json.loads(other_path.read_text(encoding="utf-8"))
+    on_report, off_report = ((report, other) if state == "on"
+                             else (other, report))
+    _recommend(on_report, off_report)
     return 0
+
+
+def _recommend(on_report: dict, off_report: dict) -> None:
+    """Print the threshold for each signal, from the gap between on and off.
+
+    A signal is only usable if its two ranges do not overlap. Reporting which
+    ones overlap matters as much as the numbers: at this venue brightness does
+    overlap, and knowing that is what stops someone tuning it forever.
+    """
+    METRICS = (("luminance", "STRIKEE_SCREEN_LUM"),
+               ("contrast", "STRIKEE_SCREEN_CONTRAST"),
+               ("saturation", "STRIKEE_SCREEN_SAT"),
+               ("change", "STRIKEE_SCREEN_CHANGE"))
+
+    print("=" * 68)
+    print("ON vs OFF")
+    print("=" * 68)
+    usable: dict = {}
+    for sensor_id, on in on_report.items():
+        off = off_report.get(sensor_id)
+        if not off:
+            continue
+        print(f"\n{on['asset']}  ({on['camera']})")
+        for metric, env in METRICS:
+            a, b = on["stats"].get(metric), off["stats"].get(metric)
+            if not a or not b:
+                print(f"    {metric:<11} not measured in both runs")
+                continue
+            # ON must clear OFF's ceiling for the signal to separate them.
+            gap = a["min"] - b["max"]
+            if gap > 0:
+                pick = round(b["max"] + gap / 2)
+                usable.setdefault(env, []).append(pick)
+                print(f"    {metric:<11} on {a['min']:.0f}-{a['max']:.0f}  "
+                      f"off {b['min']:.0f}-{b['max']:.0f}   "
+                      f"SEPARATES -> {env}={pick}")
+            else:
+                print(f"    {metric:<11} on {a['min']:.0f}-{a['max']:.0f}  "
+                      f"off {b['min']:.0f}-{b['max']:.0f}   overlaps, "
+                      f"cannot decide alone")
+
+    print("\n" + "=" * 68)
+    if usable:
+        print("Put these in .env - the most conservative value across cameras:\n")
+        for env, picks in usable.items():
+            print(f"    {env}={max(picks)}")
+        print("""
+A screen counts as on if it is bright, OR moving, OR structured AND coloured -
+so a signal that overlaps does no harm as long as one of the others separates.""")
+    else:
+        print("""No signal separated on from off.
+
+That usually means the zone takes in more than the panel: wall, a window, or a
+reflection on the bezel dilutes every statistic toward the room. Redraw it
+tight to the screen itself:
+
+    python field_setup.py --redraw --venue "..." --source-name "..." --mode screen""")
 
 
 def main() -> int:
@@ -162,6 +250,10 @@ def main() -> int:
                          "this long and report the range of lum/change - run "
                          "it once with the TVs on and once with them off to "
                          "pick a threshold from data")
+    ap.add_argument("--state", choices=("on", "off"),
+                    help="what the TVs were doing during a --watch run. Do one "
+                         "of each and the second prints the thresholds that "
+                         "separate them")
     ap.add_argument("--aspect", default=os.environ.get("STRIKEE_PERSON_ASPECT"))
     args = ap.parse_args()
 
@@ -207,7 +299,7 @@ def main() -> int:
     # on this hardware that import alone costs more than the whole measurement.
     if args.watch:
         return watch_screens(sources, by_source, zones, assets,
-                             args.watch, args.gap)
+                             args.watch, args.gap, args.state, args.out)
 
     kinds = {s["type"] for s in sensors}
     person_det = snooker_det = None
@@ -282,13 +374,12 @@ def main() -> int:
                           if prev_frame is not None else None)
                 obs = observe_screen(frame, S(), previous=before)
                 verdict = obs["present"]
-                lum_on, change_on = _screen_thresholds(S.params)
-                if before is None:
-                    detail = (f"lum={obs['luminance']} (on at >={lum_on:g})  "
-                              f"change=UNMEASURED - brightness only")
-                else:
-                    detail = (f"lum={obs['luminance']} (>={lum_on:g})  "
-                              f"change={obs['change']} (>={change_on:g})")
+                t = _screen_thresholds(S.params)
+                detail = (f"[{obs['reason']}] lum={obs['luminance']}/{t['lum']:g} "
+                          f"contrast={obs['contrast']}/{t['contrast']:g} "
+                          f"sat={obs['saturation']}/{t['sat']:g} ")
+                detail += ("change=UNMEASURED" if before is None
+                           else f"change={obs['change']}/{t['change']:g}")
             else:
                 dets = balls if kind == SNOOKER_KIND else people
                 obs = observe(kind, dets, S())

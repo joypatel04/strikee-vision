@@ -75,25 +75,50 @@ def observe_snooker_game(detections: list[Detection], sensor) -> dict:
 def observe_screen(frame, sensor, previous=None) -> dict:
     """present when the screen inside the zone is on.
 
-    No model: a display that is on is either bright or changing, usually both.
-    Brightness alone is not enough - a dark game scene is dimmer than the room -
-    and change alone is not enough either, because a paused game is perfectly
-    still. Taking either signal covers both, and the state engine's smoothing
-    absorbs the rest.
+    No model - four cheap statistics over the zone's pixels.
 
-    `previous` is the same zone's pixels from the last sample; without one we
-    have no change signal and fall back to brightness. Returns the crop so the
-    caller can pass it back next time.
+    Brightness alone cannot do this, and the field data says so plainly: a dark
+    panel reflecting room lights reads 92-97, while a night level or a loading
+    screen on a TV that is genuinely ON can read below that. The two ranges
+    OVERLAP, so no threshold on mean brightness separates them - raise it and you
+    lose dark games, lower it and every off TV reads as on.
+
+    What does separate them is the character of the picture, not its level:
+
+      luminance   mean grey. Settles the easy case, a bright screen.
+      change      mean absolute difference from the last look. A TV playing
+                  anything moves; a reflection of a still room does not.
+      contrast    standard deviation across the zone. Content has structure -
+                  bright HUD on a dark scene, subtitles, edges. A reflection is
+                  a smooth wash of ambient light.
+      saturation  mean channel spread. Games are coloured; reflected room light
+                  is very nearly grey.
+
+    So a dim, still, but structured and colourful zone reads ON, and a bright,
+    smooth, grey one reads OFF - which is the pair brightness alone got backwards.
+
+    `previous` is the same zone's grey pixels from the last sample; without one
+    there is no change signal. Returns the crop so the caller can pass it back.
     """
+    import os
+
     import numpy as np
 
     crop = _zone_crop(frame, sensor)
     if crop is None or crop.size == 0:
         return {"present": False, "count": 0, "confidence": 0.0, "points": [],
-                "luminance": 0.0, "change": 0.0, "crop": None}
+                "luminance": 0.0, "change": 0.0, "contrast": 0.0,
+                "saturation": 0.0, "reason": "no zone", "crop": None}
 
     grey = crop.mean(axis=2) if crop.ndim == 3 else crop
     luminance = float(grey.mean())
+    contrast = float(grey.std())
+
+    if crop.ndim == 3:
+        as_f = crop.astype("float32")
+        saturation = float((as_f.max(axis=2) - as_f.min(axis=2)).mean())
+    else:
+        saturation = 0.0        # a mono frame cannot tell us about colour
 
     change = 0.0
     if previous is not None and getattr(previous, "shape", None) == grey.shape:
@@ -101,21 +126,39 @@ def observe_screen(frame, sensor, previous=None) -> dict:
 
     # Per-sensor params win, so one awkward TV can be tuned on its own; the env
     # vars are the venue-wide default.
-    import os
     params = getattr(sensor, "params", None) or {}
-    lum_on = float(params.get("screen_lum",
-                              os.environ.get("STRIKEE_SCREEN_LUM", 90.0)))
-    change_on = float(params.get("screen_change",
-                                 os.environ.get("STRIKEE_SCREEN_CHANGE", 6.0)))
 
-    on = luminance >= lum_on or change >= change_on
-    # Confidence rises with whichever signal is carrying the decision, so a
+    def _p(key, env, default):
+        return float(params.get(key, os.environ.get(env, default)))
+
+    # 120, not 90: an off panel reflecting room lighting measured 92-97 at the
+    # venue, so 90 called every dark TV "on" all evening.
+    lum_on = _p("screen_lum", "STRIKEE_SCREEN_LUM", 120.0)
+    change_on = _p("screen_change", "STRIKEE_SCREEN_CHANGE", 6.0)
+    contrast_on = _p("screen_contrast", "STRIKEE_SCREEN_CONTRAST", 28.0)
+    sat_on = _p("screen_sat", "STRIKEE_SCREEN_SAT", 14.0)
+
+    # Any ONE of these is enough, except the last, which needs both halves:
+    # structure without colour is a window reflection, and colour without
+    # structure is a wall. Together they are a picture.
+    signals = [
+        ("bright", luminance >= lum_on, luminance / max(lum_on, 1.0)),
+        ("moving", change >= change_on, change / max(change_on, 1.0)),
+        ("picture", contrast >= contrast_on and saturation >= sat_on,
+         min(contrast / max(contrast_on, 1.0), saturation / max(sat_on, 1.0))),
+    ]
+    fired = [(name, ratio) for name, ok, ratio in signals if ok]
+    on = bool(fired)
+
+    # Confidence follows whichever signal is carrying the decision, so a
     # borderline screen does not look as certain as an obvious one.
-    confidence = min(1.0, max(luminance / max(lum_on, 1.0),
-                              change / max(change_on, 1.0)) / 2.0) if on else 0.0
+    confidence = min(1.0, max(r for _, r in fired) / 2.0) if on else 0.0
+    reason = "+".join(name for name, _ in fired) if on else "off"
+
     return {"present": on, "count": 1 if on else 0, "confidence": confidence,
             "points": [], "luminance": round(luminance, 1),
-            "change": round(change, 2), "crop": grey}
+            "change": round(change, 2), "contrast": round(contrast, 1),
+            "saturation": round(saturation, 1), "reason": reason, "crop": grey}
 
 
 def _zone_crop(frame, sensor):

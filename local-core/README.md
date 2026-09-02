@@ -154,7 +154,9 @@ station after 15. Seconds are converted per asset from its own rate, so 120 mean
 
 | Setting | Default | What it does |
 |---|---|---|
-| `STRIKEE_SCREEN_LUM` | `90` | Brightness in a screen zone counting as "on". |
+| `STRIKEE_SCREEN_LUM` | `120` | Brightness counting as "on". Not `90`: an off panel reflecting room lights measured 92–97 at the venue. |
+| `STRIKEE_SCREEN_CONTRAST` | `28` | Spread of brightness across the zone. Content has structure; a reflection is a smooth wash. |
+| `STRIKEE_SCREEN_SAT` | `14` | Colour in the zone. Games are coloured; reflected room light is nearly grey. |
 | `STRIKEE_SCREEN_CHANGE` | `6` | Frame-to-frame change counting as "on". |
 | `STRIKEE_SCREEN_HOLD_TICKS` | `2` | Consecutive dark reads forgiven before the screen closes the station. A screen never yet seen on gets no hold. |
 
@@ -344,7 +346,7 @@ sensor:
 
 ```
 IN USE  RED   occupancy   1 in zone
-closed  RED   screen      lum=25.0 (on at >= 90)
+closed  RED   screen      [off] lum=94.2/120 contrast=9.1/28 sat=4.0/14 change=1.10/6
 ```
 
 That pair says the person is seen and inside the zone, and the screen gate is
@@ -356,10 +358,34 @@ Two more things it can tell you:
 .venv\Scripts\python.exe tools\debug_frame.py --venue "Strikee Club" --watch 60
 ```
 
-samples every screen zone for a minute and reports the range of `lum` and
-`change` it saw. Run it once with the TVs on and once with them off, and put the
-threshold in the gap between the two ranges. A threshold picked from a single
-reading is a coin flip - that reading may be the brightest frame of a dark game.
+samples every screen zone for a minute. Add `--state on` / `--state off` and run
+it twice - once with the TVs on, once off - and the second run prints the
+thresholds that separate the two.
+
+### Why brightness alone cannot decide a screen
+
+Measured at the venue: an **off** panel reads 92-97, because it reflects the room
+lighting. A night level or loading screen on a TV that is **on** can read below
+that. The two ranges overlap, so no brightness threshold works - raise it and you
+lose dark games, lower it and every off TV reads as on.
+
+Four statistics are taken over the zone instead, and any one is enough:
+
+| | on | off |
+|---|---|---|
+| `luminance` | bright screen | *also* a lit reflection |
+| `change` | anything playing | a still room |
+| `contrast` | HUD, subtitles, edges | a smooth wash of ambient light |
+| `saturation` | games are coloured | reflected light is nearly grey |
+
+Structure and colour are required *together*: structure without colour is a
+window reflection, colour without structure is a wall. The verdict names which
+signal fired, so `[picture]` and `[bright]` are distinguishable at a glance and
+`[off]` tells you none of them did.
+
+If `--state` reports that **every** signal overlaps, the zone is taking in more
+than the panel - wall, bezel or a window dilutes every statistic toward the
+room - and the fix is a tighter redraw, not a number.
 
 ### Camera frames in the dashboard
 
