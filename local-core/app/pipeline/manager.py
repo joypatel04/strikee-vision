@@ -117,6 +117,7 @@ class RuntimeManager:
             exit_sec=_sec("STRIKEE_EXIT_SEC"),
             still_sec=_sec("STRIKEE_STILL_SEC"),
             screen_hold_ticks=int(os.environ.get("STRIKEE_SCREEN_HOLD_TICKS", "2")),
+            support_high_conf=float(os.environ.get("STRIKEE_SUPPORT_CONF", "0.6")),
         )
         motion = float(os.environ.get("STRIKEE_MOTION_THRESHOLD", "8.0"))
         person_model = os.environ.get("STRIKEE_PERSON_MODEL", self._model)

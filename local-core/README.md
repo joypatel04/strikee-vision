@@ -154,6 +154,7 @@ station after 15. Seconds are converted per asset from its own rate, so 120 mean
 
 | Setting | Default | What it does |
 |---|---|---|
+| `STRIKEE_SUPPORT_CONF` | `0.6` | Confidence a supporting camera needs before it can override an empty primary. |
 | `STRIKEE_PERSON_ANCHOR` | `feet` | Which part of a person decides where they are — `feet`, `center` or `body`. See below. |
 | `STRIKEE_SCREEN_LUM` | `120` | Brightness counting as "on". Not `90`: an off panel reflecting room lights measured 92–97 at the venue. |
 | `STRIKEE_SCREEN_CONTRAST` | `off` | Spread of brightness across the zone. Off by default: measured at the venue it runs **backwards**, because these zones take in bezel and wall. Enable only if `--watch` says it separates. |
