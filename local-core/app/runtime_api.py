@@ -2,6 +2,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .analytics import AnalyticsStore
@@ -188,5 +189,50 @@ def build_runtime_router() -> APIRouter:
                   if n["status"] in ("pending", "delivered", "acknowledged")]
         return {"sessions": sessions, "notifications": notifs,
                 "total": len(sessions) + len(notifs)}
+
+    # ---------------------------------------------------------- live frames
+    # The last frame each camera produced, with the zones and detections drawn
+    # on. These are written by the pipeline and never uploaded; see
+    # LiveFrameStore for why they cannot accumulate.
+
+    def _live_store():
+        import os
+
+        from .snapshots import LiveFrameStore
+        return LiveFrameStore(
+            os.environ.get("STRIKEE_SNAPSHOT_DIR", "snapshots"),
+            max_width=int(os.environ.get("STRIKEE_LIVE_FRAME_WIDTH", "960")))
+
+    @router.get("/api/venues/{venue_id}/live-frames")
+    def list_live_frames(venue_id: str, db: Database = Depends(get_db)):
+        """One entry per configured camera, whether or not a frame exists yet.
+
+        Listing cameras with no frame is the point: a camera absent from this
+        list would look like a camera that is fine, when it is the one that
+        never returned a picture.
+        """
+        store = _live_store()
+        with db.cursor() as cur:
+            cur.execute("SELECT id, name FROM video_sources WHERE venue_id = ? "
+                        "ORDER BY name", (venue_id,))
+            cameras = [dict(r) for r in cur.fetchall()]
+        return [
+            {"source_id": c["id"], "name": c["name"],
+             "url": f"/api/venues/{venue_id}/live-frames/{c['id']}",
+             **store.describe(venue_id, c["id"])}
+            for c in cameras
+        ]
+
+    @router.get("/api/venues/{venue_id}/live-frames/{source_id}")
+    def get_live_frame(venue_id: str, source_id: str):
+        path = _live_store().path_for(venue_id, source_id)
+        if path is None:
+            raise HTTPException(404, "no frame captured for this camera yet")
+        # no-store: the file is overwritten in place, so a cached copy is a
+        # picture of the past served as the present.
+        return FileResponse(
+            path, media_type="image/jpeg",
+            headers={"Cache-Control": "no-store"},
+            filename=f"{source_id}.jpg")
 
     return router

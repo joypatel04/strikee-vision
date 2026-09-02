@@ -146,14 +146,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
         copies stay in the bucket, so this only trims the local working set.
         """
         keep_days = int(os.environ.get("STRIKEE_SNAPSHOT_KEEP_DAYS", "30"))
-        if keep_days <= 0:
-            return                      # 0 = keep everything, deliberately
+        max_mb = float(os.environ.get("STRIKEE_SNAPSHOT_MAX_MB", "2000"))
+        if keep_days <= 0 and max_mb <= 0:
+            return                      # both off = keep everything, deliberately
         from .snapshots import SnapshotStore
         store = SnapshotStore(os.environ.get("STRIKEE_SNAPSHOT_DIR", "snapshots"))
         while True:
             await asyncio.sleep(6 * 60 * 60)      # four times a day
             try:
-                await asyncio.to_thread(store.cleanup, keep_days)
+                await asyncio.to_thread(store.cleanup, keep_days, max_mb)
             except asyncio.CancelledError:
                 raise
             except Exception:

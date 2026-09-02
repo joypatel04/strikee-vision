@@ -11,6 +11,7 @@ from typing import Callable, Optional
 import math
 
 from .observe import SCREEN_KIND, observe, PERSON_KINDS, SNOOKER_KIND
+from .overlay import annotate
 from .perception import Detector
 from .sink import ChangeEvent, StateSink
 from .snooker_game import SnookerGameTracker
@@ -121,6 +122,7 @@ class LiveRuntime:
         rerack_low_band: int = 2,
         rerack_high_band: int = 7,
         debug_log=None,
+        live_frames=None,
     ):
         self.venue_id = venue_id
         self.assets = assets
@@ -138,6 +140,7 @@ class LiveRuntime:
         self._screen_prev: dict = {}
         self._prev_points: dict[str, list] = {}
         self._last_frames: dict[str, object] = {}   # source_id -> last frame
+        self.live_frames = live_frames   # LiveFrameStore | None
 
         # rolling per-sensor observation caches — updated when a source is
         # processed, read when its assets are evaluated. This lets capture be
@@ -243,6 +246,51 @@ class LiveRuntime:
             self._source_ok[src.id] = ok
             bucket = self._detect_source(src, ok, frame)
             self._observe_source(src, bucket, frame if ok else None)
+            if self.live_frames is not None and ok and frame is not None:
+                self._write_live_frame(src, frame, bucket)
+
+    def _write_live_frame(self, src: SourceRuntime, frame, bucket: dict) -> None:
+        """Save what this camera just showed, with the verdicts drawn on it.
+
+        Done here rather than in the dashboard because this is the only place
+        that has all three at once: the frame, the detections it produced, and
+        the per-sensor verdict they led to. Rendering it later from a fresh grab
+        would show a different moment than the one the state engine acted on -
+        which is precisely the discrepancy you would be trying to investigate.
+
+        Best-effort throughout: a camera you cannot look at is a nuisance,
+        a pipeline that stops tracking is an outage.
+        """
+        try:
+            zones, boxes = [], []
+            for sensor in src.sensors:
+                raw = self._raw_by_sensor.get(sensor.id)
+                label = f"{sensor.kind}"
+                if sensor.kind == SCREEN_KIND:
+                    label = "screen ON" if (raw and raw.present) else "screen off"
+                zones.append((sensor.zone_polygons, label,
+                              bool(raw and raw.present),
+                              sensor.kind in PERSON_KINDS))
+            boxes += [(d.bbox, "person") for d in bucket.get("person", [])]
+            boxes += [(d.bbox, "ball") for d in bucket.get("snooker", [])]
+            # _clock() yields an ISO string, not a datetime. Show it in venue
+            # local time - the person reading this caption is standing in the
+            # room, and a UTC stamp makes them do arithmetic to check whether
+            # they are looking at now or at half an hour ago.
+            stamp = self._clock()
+            try:
+                stamp = (datetime.fromisoformat(stamp).astimezone()
+                         .strftime("%Y-%m-%d %H:%M:%S"))
+            except (TypeError, ValueError):
+                stamp = str(stamp)
+            caption = f"{src.name}  {stamp}"
+            canvas = annotate(frame, zones=zones, boxes=boxes, caption=caption,
+                              max_width=self.live_frames.max_width)
+            self.live_frames.write(self.venue_id, src.id, canvas)
+        except Exception as exc:
+            # Best-effort, but not silent: swallowing this whole is how you get
+            # an empty camera panel with nothing anywhere saying why.
+            self.live_frames.last_error = f"{type(exc).__name__}: {exc}"[:200]
 
     def evaluate_assets(
         self, assets: Optional[list[AssetRuntime]] = None
@@ -387,6 +435,7 @@ def build_live_runtime(
     rerack_low_band: int = 2,
     rerack_high_band: int = 7,
     debug_log=None,
+    live_frames=None,
 ) -> LiveRuntime:
     assets, sources = load_venue_config(db, venue_id)
     frame_sources = {}
@@ -402,4 +451,4 @@ def build_live_runtime(
                        min_game_sec=min_game_sec, max_game_sec=max_game_sec,
                        rack_red_threshold=rack_red_threshold, rerack_jump=rerack_jump,
                        rerack_low_band=rerack_low_band, rerack_high_band=rerack_high_band,
-                       debug_log=debug_log)
+                       debug_log=debug_log, live_frames=live_frames)

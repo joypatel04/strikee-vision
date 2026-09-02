@@ -50,6 +50,12 @@ class SnapshotStore:
         explicit = (s3_region or os.environ.get("STRIKEE_S3_REGION")
                     or os.environ.get("STRIKEE_BACKUP_REGION"))
         self.s3_region = explicit or ("auto" if self.s3_endpoint else None)
+        # What reaches the cloud. Evidence images are the ones worth paying to
+        # keep - three per game, tied to a session someone may query months
+        # later. "none" keeps the local archive and the bucket untouched, for a
+        # venue that wants the images but not the bill.
+        self.upload_policy = (os.environ.get("STRIKEE_S3_UPLOAD", "all")
+                              or "all").strip().lower()
         # Upload is best-effort, so failures must be visible somewhere or they
         # are invisible everywhere.
         self.uploads_ok = 0
@@ -104,7 +110,7 @@ class SnapshotStore:
         return boto3.client("s3", **kwargs)
 
     def _maybe_upload(self, path: Path, key: str) -> None:
-        if not self.s3_bucket:
+        if not self.s3_bucket or self.upload_policy == "none":
             return
         try:  # best-effort; never block the pipeline
             self._client().upload_file(str(path), self.s3_bucket, key)
@@ -116,7 +122,8 @@ class SnapshotStore:
     def upload_status(self) -> dict:
         """Whether snapshot upload is configured and working, for diagnostics."""
         return {
-            "enabled": bool(self.s3_bucket),
+            "enabled": bool(self.s3_bucket) and self.upload_policy != "none",
+            "policy": self.upload_policy,
             "bucket": self.s3_bucket,
             "endpoint": self.s3_endpoint or "AWS S3 (no endpoint set)",
             "region": self.s3_region or "resolved by boto3 (AWS_DEFAULT_REGION)",
@@ -139,22 +146,150 @@ class SnapshotStore:
                     pass
         return {"files": count, "megabytes": round(total / 1e6, 1)}
 
-    def cleanup(self, keep_days: int = 7) -> int:
-        """Delete snapshot images older than keep_days. Returns count removed.
+    def _archive_files(self):
+        """Every evidence image, newest last. Excludes the live-frame directory:
+        those are a fixed-size working set that rewrites itself, not archive, and
+        deleting them because the pipeline was off for a month would throw away
+        the most useful thing to look at when you come back to a stopped system.
+        """
+        live = self.base / LiveFrameStore.DIRNAME
+        files = []
+        for f in self.base.rglob("*.jpg"):
+            try:
+                if live in f.parents:
+                    continue
+                files.append((f.stat().st_mtime, f))
+            except OSError:
+                pass
+        files.sort()
+        return files
 
-        Local images are the working copy; anything uploaded stays in the bucket,
-        so this trims disk without losing the archive.
+    def cleanup(self, keep_days: int = 7, max_mb: float = 0) -> int:
+        """Trim the local evidence archive. Returns the number of images removed.
+
+        Two bounds, because age alone is not one. keep_days answers "how far back
+        do we care", but says nothing about how much disk that takes - a busy
+        weekend can write more in two days than a quiet fortnight, and the box
+        this runs on has one small disk shared with the database. max_mb is the
+        bound that actually protects the disk; age is the one that matches how
+        people think about evidence.
+
+        Anything uploaded stays in the bucket, so this only trims the local
+        working copy.
         """
         if not self.base.exists():
             return 0
-        cutoff = datetime.now(timezone.utc).astimezone() - timedelta(days=keep_days)
+        files = self._archive_files()
         removed = 0
-        for f in self.base.rglob("*.jpg"):
-            try:
-                mtime = datetime.fromtimestamp(f.stat().st_mtime).astimezone()
+
+        if keep_days > 0:
+            cutoff = (datetime.now(timezone.utc).astimezone()
+                      - timedelta(days=keep_days)).timestamp()
+            kept = []
+            for mtime, f in files:
                 if mtime < cutoff:
+                    try:
+                        f.unlink()
+                        removed += 1
+                        continue
+                    except OSError:
+                        pass
+                kept.append((mtime, f))
+            files = kept
+
+        if max_mb and max_mb > 0:
+            budget = max_mb * 1024 * 1024
+            total = 0
+            sizes = []
+            for mtime, f in files:
+                try:
+                    sizes.append((mtime, f, f.stat().st_size))
+                    total += sizes[-1][2]
+                except OSError:
+                    pass
+            # Oldest first until back under budget.
+            for _, f, size in sizes:
+                if total <= budget:
+                    break
+                try:
                     f.unlink()
+                    total -= size
                     removed += 1
-            except Exception:
-                pass
+                except OSError:
+                    pass
         return removed
+
+
+class LiveFrameStore:
+    """The most recent frame from each camera, for looking at - not for keeping.
+
+    Three properties matter, and they are the opposite of SnapshotStore's:
+
+    * ONE file per camera, overwritten in place. Ten cameras is ten files,
+      today and in a year. There is nothing to prune because nothing
+      accumulates - which is the only bound worth having on something written
+      every few seconds.
+    * NEVER uploaded. An evidence image is written three times a game and is
+      worth cloud storage; a live frame is written all day and is worthless ten
+      seconds later. Uploading these would be paying to store noise, so this
+      class has no S3 client at all - not a disabled one, none.
+    * Written outside the date tree, so the evidence archive stays a clean
+      record of games and is not diluted by thousands of look-at-me frames.
+
+    Layout:  <base>/live/<venue_id>/<source_id>.jpg
+    """
+
+    DIRNAME = "live"
+
+    def __init__(self, base_dir: str = "snapshots", quality: int = 70,
+                 max_width: int = 960):
+        self.base = Path(base_dir) / self.DIRNAME
+        self.quality = int(quality)
+        self.max_width = int(max_width)
+        self.written = 0
+        self.last_error: Optional[str] = None
+
+    def _path(self, venue_id: str, source_id: str) -> Path:
+        return self.base / _safe(venue_id) / f"{_safe(source_id)}.jpg"
+
+    def write(self, venue_id: str, source_id: str, frame) -> Optional[str]:
+        """Overwrite this camera's live frame. Best-effort: a failure here must
+        never interrupt tracking, which is the actual job."""
+        if frame is None:
+            return None
+        import cv2  # lazy
+
+        path = self._path(venue_id, source_id)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Write via a temp file in the same directory and replace: the HTTP
+            # handler may be reading this exact path while we write it, and a
+            # half-written JPEG renders as a grey box in the dashboard.
+            # The temp name must keep the .jpg suffix: OpenCV chooses its
+            # encoder from the extension, so writing to a ".tmp" fails outright
+            # with "could not find a writer" - and best-effort error handling
+            # would turn that into no live frames and no explanation.
+            tmp = path.with_name(path.name + ".part.jpg")
+            cv2.imwrite(str(tmp), frame, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+            os.replace(tmp, path)
+            self.written += 1
+            return str(path)
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"[:200]
+            return None
+
+    def path_for(self, venue_id: str, source_id: str) -> Optional[Path]:
+        path = self._path(venue_id, source_id)
+        return path if path.exists() else None
+
+    def describe(self, venue_id: str, source_id: str) -> dict:
+        """Age and size, so the dashboard can say 'this is 4 seconds old' rather
+        than showing a stale picture as if it were current."""
+        path = self._path(venue_id, source_id)
+        if not path.exists():
+            return {"available": False, "age_sec": None, "bytes": None}
+        stat = path.stat()
+        age = (datetime.now(timezone.utc)
+               - datetime.fromtimestamp(stat.st_mtime, timezone.utc)).total_seconds()
+        return {"available": True, "age_sec": round(max(0.0, age), 1),
+                "bytes": stat.st_size}

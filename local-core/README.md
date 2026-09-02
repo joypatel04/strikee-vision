@@ -194,6 +194,11 @@ tries these combinations and reports which found the most.
 | `STRIKEE_SNAPSHOT_DIR` | `snapshots` | Where evidence images go. |
 | `STRIKEE_SNAPSHOT_QUALITY` | `80` | ~75 KB per image; OpenCV's default 95 is ~160 KB for no visible gain. |
 | `STRIKEE_SNAPSHOT_KEEP_DAYS` | `30` | Local images older than this are deleted four times a day. `0` keeps everything and the disk fills. |
+| `STRIKEE_SNAPSHOT_MAX_MB` | `2000` | Disk budget for local evidence images. Once over, the oldest are deleted until under. `0` = no cap. Age alone is not a bound: a busy weekend writes more than a quiet fortnight. |
+| `STRIKEE_S3_UPLOAD` | `all` | Which evidence images reach the bucket. `none` keeps the local archive and uploads nothing. Live frames are never uploaded under any setting. |
+| `STRIKEE_LIVE_FRAMES` | `1` | Save each camera's last frame, annotated with zones and detections, for the dashboard. `0` disables. |
+| `STRIKEE_LIVE_FRAME_WIDTH` | `960` | Downscale live frames to this width before saving. |
+| `STRIKEE_LIVE_FRAME_QUALITY` | `70` | JPEG quality for live frames. |
 | `STRIKEE_DEBUG` | off | `1` writes `debug_<venue>.csv`, one row per read per asset. |
 
 Three snapshots per game (session start, game start, game end) at roughly 60
@@ -344,6 +349,34 @@ closed  RED   screen      lum=25.0 (on at >= 90)
 
 That pair says the person is seen and inside the zone, and the screen gate is
 what is closing the station - so the fix is `STRIKEE_SCREEN_LUM`, not the zone.
+
+Two more things it can tell you:
+
+```
+.venv\Scripts\python.exe tools\debug_frame.py --venue "Strikee Club" --watch 60
+```
+
+samples every screen zone for a minute and reports the range of `lum` and
+`change` it saw. Run it once with the TVs on and once with them off, and put the
+threshold in the gap between the two ranges. A threshold picked from a single
+reading is a coin flip - that reading may be the brightest frame of a dark game.
+
+### Camera frames in the dashboard
+
+**Camera frames** at the bottom of the dashboard shows the last frame each
+camera produced, with its zones, detections and verdicts drawn on. Click one to
+enlarge, or **Download** to send it on when asking for help.
+
+These are written by the pipeline itself, so they are the exact picture the
+state engine acted on - grabbing a fresh frame to look at would show a different
+moment than the one that produced the verdict you are questioning.
+
+They cost nothing to keep: one file per camera, overwritten in place, so ten
+cameras is ten files today and in a year. They are **never uploaded** - an
+evidence image is written three times a game and is worth cloud storage, a live
+frame is worthless ten seconds later. `STRIKEE_LIVE_FRAMES=0` turns them off.
+
+The section only polls while it is open, so a closed panel costs nothing.
 
 ### Judging whether it is right
 

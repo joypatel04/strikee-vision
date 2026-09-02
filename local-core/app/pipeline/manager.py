@@ -12,7 +12,7 @@ import threading
 from typing import Optional
 
 from ..notify import NotificationEngine
-from ..snapshots import SnapshotStore
+from ..snapshots import LiveFrameStore, SnapshotStore
 from ..store import (
     EventStore, MetricStore, NotificationStore, RuleStore, SessionStore,
 )
@@ -86,6 +86,16 @@ class RuntimeManager:
         notifier = NotificationEngine(
             RuleStore(self._db), NotificationStore(self._db), self._bcast)
         snapshots = SnapshotStore(os.environ.get("STRIKEE_SNAPSHOT_DIR", "snapshots"))
+        # The annotated last-frame-per-camera view. On by default: the cost is
+        # one JPEG encode per camera per pass and a fixed handful of files, and
+        # without it a station that will not open can only be diagnosed by
+        # someone standing at the venue with a laptop.
+        live_frames = None
+        if os.environ.get("STRIKEE_LIVE_FRAMES", "1") != "0":
+            live_frames = LiveFrameStore(
+                os.environ.get("STRIKEE_SNAPSHOT_DIR", "snapshots"),
+                quality=int(os.environ.get("STRIKEE_LIVE_FRAME_QUALITY", "70")),
+                max_width=int(os.environ.get("STRIKEE_LIVE_FRAME_WIDTH", "960")))
         sink = DbStateSink(EventStore(self._db), SessionStore(self._db), notifier,
                            snapshot_store=snapshots)
         sampler = MetricStore(self._db)
@@ -163,7 +173,7 @@ class RuntimeManager:
                 snooker_detector=snooker, min_game_sec=min_game, max_game_sec=max_game,
                 rack_red_threshold=rack_reds, rerack_jump=rerack_jump,
                 rerack_low_band=rerack_low, rerack_high_band=rerack_high,
-                debug_log=debug_log,
+                debug_log=debug_log, live_frames=live_frames,
             )
 
         rt = await asyncio.to_thread(_build)

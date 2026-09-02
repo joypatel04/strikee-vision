@@ -249,6 +249,43 @@
   .muted { color: var(--ink-faint); font-size: 12.5px; }
   .empty { color: var(--ink-faint); font-size: 12.5px; padding: 10px 2px; }
 
+  /* ---------- camera frames ---------- */
+  /* Collapsed by default. These are for diagnosing a problem, not for watching
+     the room - a wall of thumbnails above the tables would bury the numbers
+     that matter every other day of the year. */
+  .cams {
+    display: grid; gap: 12px; padding: 4px 16px 16px;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  }
+  .cam {
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden;
+  }
+  .cam img {
+    display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover;
+    background: #000; cursor: zoom-in;
+  }
+  .cam .meta {
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+    padding: 8px 10px; border-top: 1px solid var(--line-soft);
+  }
+  .cam .nm { font-weight: 600; font-size: 12.5px; }
+  .cam .age { font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint); }
+  .cam .age.stale { color: var(--degraded); }
+  .cam .dl { margin-left: auto; font-size: 11px; color: var(--ink-dim); }
+  .cam .none {
+    padding: 22px 10px; text-align: center; font-size: 11.5px;
+    color: var(--ink-faint);
+  }
+
+  /* Click a frame to see it full size - the detail that decides a zone question
+     is a few pixels wide at thumbnail scale. */
+  #lightbox {
+    position: fixed; inset: 0; z-index: 50; background: #000000E8;
+    display: grid; place-items: center; padding: 24px;
+  }
+  #lightbox img { max-width: 100%; max-height: 100%; cursor: zoom-out; }
+
   /* ---------- system check ---------- */
   details.diag {
     margin-top: 22px; background: var(--surface);
@@ -347,6 +384,13 @@
       <div class="rows" id="events"></div>
     </div>
   </div>
+
+  <details class="diag" id="cams">
+    <summary>Camera frames &mdash; what each camera last saw</summary>
+    <div class="cams" id="camsBody"></div>
+  </details>
+
+  <div id="lightbox" hidden><img id="lightboxImg" alt=""></div>
 
   <details class="diag" id="diag">
     <summary>System check &mdash; is everything actually configured?</summary>
@@ -608,6 +652,85 @@ async function loadFaults() {
     </div>`).join('');
 }
 
+/* ---------------- camera frames ---------------- */
+
+/* The last frame each camera produced, with its zones and detections drawn on.
+   Written by the pipeline, so this shows the exact picture the state engine
+   acted on - re-grabbing a fresh frame here would show a different moment than
+   the one that produced the verdict you are questioning. */
+
+let camsTimer = null;
+
+function ageText(sec) {
+  if (sec === null || sec === undefined) return '';
+  if (sec < 90) return Math.round(sec) + 's ago';
+  if (sec < 5400) return Math.round(sec / 60) + 'm ago';
+  return Math.round(sec / 3600) + 'h ago';
+}
+
+async function loadCameraFrames() {
+  const el = document.getElementById('camsBody');
+  if (!currentVenue) return;
+  let cams;
+  try {
+    cams = await (await fetch(`/api/venues/${currentVenue}/live-frames`)).json();
+  } catch (e) {
+    el.innerHTML = '<div class="cam none">Could not load camera frames.</div>';
+    return;
+  }
+  if (!cams.length) {
+    el.innerHTML = '<div class="cam none">No cameras configured for this venue.</div>';
+    return;
+  }
+
+  /* Cache-bust per refresh: the file is overwritten in place, so without this
+     the browser keeps showing the first frame it ever fetched. */
+  const v = Date.now();
+  el.innerHTML = cams.map(c => {
+    if (!c.available) {
+      return `<div class="cam">
+        <div class="none">No frame yet.<br>Start the pipeline, then wait one pass.</div>
+        <div class="meta"><span class="nm">${esc(c.name)}</span></div></div>`;
+    }
+    /* Older than a couple of minutes means this camera has stopped producing,
+       not that the room is quiet - say so rather than showing a stale picture
+       as though it were current. */
+    const stale = c.age_sec > 120 ? ' stale' : '';
+    const kb = Math.round(c.bytes / 1024);
+    return `<div class="cam">
+      <img src="${esc(c.url)}?v=${v}" alt="${esc(c.name)}" loading="lazy"
+           data-full="${esc(c.url)}?v=${v}">
+      <div class="meta">
+        <span class="nm">${esc(c.name)}</span>
+        <span class="age${stale}">${esc(ageText(c.age_sec))} &middot; ${kb}KB</span>
+        <a class="dl" href="${esc(c.url)}?v=${v}"
+           download="${esc(c.name)}.jpg">Download</a>
+      </div></div>`;
+  }).join('');
+
+  el.querySelectorAll('img').forEach(img => {
+    img.onclick = () => {
+      document.getElementById('lightboxImg').src = img.dataset.full;
+      document.getElementById('lightbox').hidden = false;
+    };
+  });
+}
+
+function initCameraFrames() {
+  const box = document.getElementById('cams');
+  /* Only poll while the section is open. Closed, it costs nothing; that is the
+     whole reason it is a details element rather than a panel. */
+  box.addEventListener('toggle', () => {
+    clearInterval(camsTimer);
+    if (box.open) { loadCameraFrames(); camsTimer = setInterval(loadCameraFrames, 10000); }
+  });
+  const lb = document.getElementById('lightbox');
+  lb.onclick = () => { lb.hidden = true; };
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') lb.hidden = true;
+  });
+}
+
 /* ---------------- system check ---------------- */
 
 const DIAG_GROUPS = [
@@ -752,6 +875,7 @@ async function selectVenue(venueId) {
   await loadAssets(venueId);
   connectWs(venueId);
   refreshStatus(); loadSessions(); loadEvents(); loadNotifications(); loadGames();
+  if (document.getElementById('cams').open) loadCameraFrames();
 }
 
 async function init() {
@@ -792,6 +916,7 @@ async function init() {
 
   const diag = document.getElementById('diag');
   diag.addEventListener('toggle', () => { if (diag.open) loadDiagnostics(); });
+  initCameraFrames();
 
   if (venues.length) selectVenue(venues[0].id);
   else document.getElementById('empty').textContent =
