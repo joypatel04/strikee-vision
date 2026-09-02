@@ -442,6 +442,53 @@ IN USE  Station 3  occupancy  0 in zone   by anchor: feet=0  center=2  body=2   
 Two people the feet anchor is discarding. If every anchor reads 0 while the
 picture clearly shows people, it is the zone, not the anchor.
 
+### One station, several cameras
+
+No single angle is good at everything: the camera that frames a TV squarely is
+rarely the one that sees the sofa without occlusion. An asset can carry as many
+sensors as you like, on different cameras, and each contributes what its angle
+is good for.
+
+```
+# a second angle on the same stations, as a supporting view
+python field_setup.py --venue "Strikee Club" --source-name "Gaming Camera D" \
+    --attach --role supporting --mode occupancy
+
+# the TV, from whichever camera frames it best
+python field_setup.py --venue "Strikee Club" --source-name "Gaming Camera A" \
+    --attach --mode screen
+```
+
+Name each zone **exactly** as the existing station is named — that is what
+attaches it to the same asset rather than creating a new one.
+
+How the evidence combines:
+
+| | rule |
+|---|---|
+| primary occupancy sensors | **any** of them seeing someone marks the station occupied |
+| supporting occupancy sensors | only when confident (`STRIKEE_SUPPORT_CONF`, default `0.6`) — the awkward angles get a vote, not a veto |
+| screen sensors | **any** of them seeing the TV on satisfies the gate |
+| a camera that is offline | ignored, not counted as empty — one dead stream must not close a station |
+| every camera offline | the station goes `unknown`, never `free` |
+
+So a station covered from two angles survives one being blocked, and a TV
+watched from two angles survives one being washed out by a reflection. Use
+`supporting` for an angle you trust less; it can rescue an occluded primary but
+cannot mark a station busy on a weak detection.
+
+### Overlapping zones
+
+Two zones on **one camera** that share space will both count the same customer —
+one person, two billed sessions. `field_setup` warns while you draw;
+`tools/show_config.py` now also checks what is already in the database, which is
+where an overlap created in an earlier session hides.
+
+It shows up as a station counting somebody who is sitting at the one next to it,
+and a permissive `STRIKEE_PERSON_ANCHOR` makes it worse rather than better: more
+points on the body means more chances to land in the wrong polygon. If one
+person reads `feet=1 center=2`, the anchor is not the problem — the zones are.
+
 ### Camera frames in the dashboard
 
 **Camera frames** at the bottom of the dashboard shows the last frame each

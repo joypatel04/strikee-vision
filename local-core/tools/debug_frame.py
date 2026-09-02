@@ -557,6 +557,32 @@ def main() -> int:
             inside = any(point_in_polygon((gx, gy), p) for p in person_polys)
             cv2.circle(canvas, (int(gx), int(gy)), 7, GREEN if inside else RED, -1)
             cv2.circle(canvas, (int(gx), int(gy)), 7, WHITE, 1)
+        # One line per detected person, naming the station each anchor puts them
+        # in. Counts alone cannot tell "the model saw nobody" from "it saw
+        # someone and the zone threw them away", and they cannot show that a
+        # count of 2 on a station with one player is one real person plus one
+        # phantom borrowed from the next station along.
+        from app.pipeline.geometry import ANCHORS, anchor_points
+        person_sensors = [s for s in mine if s["type"] in PERSON_KINDS]
+        if person_sensors:
+            print(f"\n  {len(people)} person detection(s) in this frame:")
+            if not people:
+                print("    (none - this is a detection problem, not a zone one)")
+            for i, d in enumerate(people, 1):
+                x1, y1, x2, y2 = (int(v) for v in d.bbox)
+                where = []
+                for a in ANCHORS:
+                    hits = sorted({
+                        assets[s["asset_id"]]["name"] for s in person_sensors
+                        if any(point_in_polygon(pt, poly)
+                               for pt in anchor_points(d.bbox, a)
+                               for poly in ((zones.get(s["zone_id"]) or {})
+                                            .get("polygons") or []))})
+                    where.append(f"{a}->{'+'.join(hits) if hits else '-'}")
+                below = "conf BELOW threshold" if d.confidence < 0.35 else ""
+                print(f"    #{i} conf {d.confidence:.2f}  box ({x1},{y1})-({x2},{y2})"
+                      f"  {'  '.join(where)}  {below}")
+
         if people and person_polys:
             outside = sum(1 for d in people
                           if not any(point_in_polygon(ground_point(d.bbox), p)
@@ -583,6 +609,14 @@ occupied and red when it does not.
                                               are seated (the dot lands on the seat)
   no grey boxes at all                     -> detection, not zones. Try
                                               tools/survey_cameras.py --sweep
+  one person, but a station counts 2       -> two zones overlap, or one zone
+                                              reaches into the next station.
+                                              The per-person lines above name
+                                              which stations claim them
+  a station counts someone who is not      -> that zone is too big. A permissive
+  in it                                     anchor makes this worse, not better:
+                                              more points means more chances to
+                                              land inside the wrong polygon
   person dot GREEN but the asset is closed -> its SCREEN sensor is holding it
                                               shut; look at the lum= reading""")
     return 1 if any_problem else 0

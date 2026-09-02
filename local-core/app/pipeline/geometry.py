@@ -100,3 +100,25 @@ def detection_center_in_any_polygon(det: Detection, polygons: list) -> bool:
     """True if the detection's centre falls inside any polygon (for balls)."""
     cp = center_point(det.bbox)
     return any(point_in_polygon(cp, poly) for poly in polygons)
+
+
+def overlapping_pairs(named_polygons) -> list:
+    """Which of these zones share space, as (name_a, name_b) pairs.
+
+    `named_polygons` is [(name, polygon), ...]. Only meaningful for zones on the
+    SAME camera: the coordinates are pixels in that camera's picture, so two
+    zones from different cameras "overlapping" means nothing at all.
+
+    A person is placed at a point, so a point in the shared area marks BOTH
+    stations occupied - one customer, two billed sessions, and nothing on the
+    dashboard explains it. Vertex containment both ways, which catches every
+    overlap a hand-drawn room zone realistically produces.
+    """
+    out = []
+    items = list(named_polygons)
+    for i, (name_a, poly_a) in enumerate(items):
+        for name_b, poly_b in items[i + 1:]:
+            if any(point_in_polygon(pt, poly_b) for pt in poly_a) or \
+               any(point_in_polygon(pt, poly_a) for pt in poly_b):
+                out.append((name_a, name_b))
+    return out

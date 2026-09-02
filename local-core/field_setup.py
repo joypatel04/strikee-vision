@@ -210,16 +210,9 @@ def _overlapping_pairs(zones: list[dict]) -> list[tuple[str, str]]:
     and nothing on screen explains it. Checked by vertex containment both ways,
     which catches every overlap a hand-drawn room zone realistically produces.
     """
-    from app.pipeline.geometry import point_in_polygon
+    from app.pipeline.geometry import overlapping_pairs
 
-    out = []
-    for i, a in enumerate(zones):
-        for b in zones[i + 1:]:
-            pa, pb = a["polygon"], b["polygon"]
-            if any(point_in_polygon(pt, pb) for pt in pa) or \
-               any(point_in_polygon(pt, pa) for pt in pb):
-                out.append((a["name"], b["name"]))
-    return out
+    return overlapping_pairs((z["name"], z["polygon"]) for z in zones)
 
 
 def _find(repo, cur, **match):

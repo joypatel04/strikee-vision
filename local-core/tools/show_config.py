@@ -71,6 +71,7 @@ def main() -> int:
     def short(i):
         return i if args.ids else i[:8]
 
+    assets_by_id = {a["id"]: a for a in assets}
     by_asset = {}
     for s in sensors:
         by_asset.setdefault(s["asset_id"], []).append(s)
@@ -120,6 +121,35 @@ def main() -> int:
         print(f"    {src['name']:<20} {short(src['id'])}{mark}")
         print(f"        {_mask(src.get('uri'))}")
         print(f"        watches: {', '.join(watching) or 'nothing'}")
+
+    # Overlapping zones on one camera. field_setup checks this while you draw,
+    # but nothing ever checked what is already in the database - so an overlap
+    # created in an earlier session, or by a redraw, stayed invisible. It shows
+    # up as a station counting a customer who is sitting at the one next to it.
+    from app.pipeline.geometry import overlapping_pairs
+
+    PERSON_KINDS = {"occupancy", "presence", "person"}
+    overlaps = []
+    by_camera = {}
+    for sensor in sensors:
+        if sensor.get("type") not in PERSON_KINDS:
+            continue
+        zone = zones.get(sensor.get("zone_id")) or {}
+        for poly in (zone.get("polygons") or []):
+            name = assets_by_id.get(sensor["asset_id"], {}).get("name", "?")
+            by_camera.setdefault(sensor.get("video_source_id"), []).append((name, poly))
+    for src_id, items in by_camera.items():
+        for a, b in overlapping_pairs(items):
+            if a != b:
+                cam = (sources.get(src_id) or {}).get("name", "?")
+                overlaps.append((cam, a, b))
+
+    if overlaps:
+        print("\n  OVERLAPPING ZONES - one person can mark both stations occupied:")
+        for cam, a, b in overlaps:
+            print(f"    {cam}: '{a}' and '{b}' share space")
+        print("    Redraw one of each pair so they do not touch. Until then a\n"
+              "    single customer in the shared area becomes two sessions.")
 
     if dupes:
         print("\n  DUPLICATE NAMES - by-name lookups cannot tell these apart:")
