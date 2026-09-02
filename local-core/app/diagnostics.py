@@ -55,6 +55,8 @@ _KNOBS: list[tuple[str, Optional[str], Callable[[str], Any], str, str]] = [
      "Still reads before Active drops to Idle."),
     ("STRIKEE_MOTION_THRESHOLD", "8.0", float, "state",
      "Pixel movement that counts as play."),
+    ("STRIKEE_PERSON_ANCHOR", "feet", str, "state",
+     "Which part of a person decides where they are: feet, center or body. Sofa seating wants body."),
     ("STRIKEE_SCREEN_LUM", "120", float, "state",
      "Brightness in a screen zone that counts as the TV being on."),
     ("STRIKEE_SCREEN_CONTRAST", "28", float, "state",

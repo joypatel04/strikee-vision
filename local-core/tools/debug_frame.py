@@ -402,7 +402,7 @@ def main() -> int:
     import cv2
     from app.pipeline.capture import grab_once
     from app.pipeline.observe import (PERSON_KINDS, SCREEN_KIND, SNOOKER_KIND,
-                                      observe, observe_screen)
+                                      observe, observe_screen, person_anchor)
     from app.pipeline.perception import SnookerDetector, YOLODetector
 
     repos = {s.name: Repository(s) for s in REGISTRY}
@@ -524,6 +524,20 @@ def main() -> int:
                 obs = observe(kind, dets, S())
                 verdict = obs["present"]
                 detail = f"{obs['count']} in zone"
+                if kind in PERSON_KINDS:
+                    # Which part of a person decides where they are is the
+                    # commonest silent mistake on sofa seating, and the counts
+                    # side by side make it obvious which anchor this zone wants.
+                    from app.pipeline.geometry import (ANCHORS,
+                                                       detection_in_any_polygon)
+                    counts = {
+                        a: sum(1 for d in dets
+                               if d.confidence >= S.conf_threshold
+                               and detection_in_any_polygon(d, polys, a))
+                        for a in ANCHORS}
+                    detail += ("   by anchor: "
+                               + "  ".join(f"{a}={n}" for a, n in counts.items()))
+                    detail += f"   (using {person_anchor(S())})"
 
             colour = GREEN if verdict else RED
             for poly in polys:

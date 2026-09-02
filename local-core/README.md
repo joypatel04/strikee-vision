@@ -154,6 +154,7 @@ station after 15. Seconds are converted per asset from its own rate, so 120 mean
 
 | Setting | Default | What it does |
 |---|---|---|
+| `STRIKEE_PERSON_ANCHOR` | `feet` | Which part of a person decides where they are — `feet`, `center` or `body`. See below. |
 | `STRIKEE_SCREEN_LUM` | `120` | Brightness counting as "on". Not `90`: an off panel reflecting room lights measured 92–97 at the venue. |
 | `STRIKEE_SCREEN_CONTRAST` | `off` | Spread of brightness across the zone. Off by default: measured at the venue it runs **backwards**, because these zones take in bezel and wall. Enable only if `--watch` says it separates. |
 | `STRIKEE_SCREEN_SAT` | `off` | Colour in the zone. Off by default for the same reason — a lamp reflected in a dark panel is colourful. |
@@ -405,6 +406,41 @@ signal fired, so `[picture]` and `[bright]` are distinguishable at a glance and
 If `--state` reports that **every** signal overlaps, the zone is taking in more
 than the panel - wall, bezel or a window dilutes every statistic toward the
 room - and the fix is a tighter redraw, not a number.
+
+### Seated people, and where a person "is"
+
+A person is matched to a zone by a point on their box, and the default is the
+bottom-centre — their feet. That is right for someone standing on a floor and
+wrong for a sofa, where the legs are hidden behind the seat back and the box
+ends at the chest.
+
+| anchor | the point | use it when |
+|---|---|---|
+| `feet` | bottom-centre | people stand on a floor you have drawn around |
+| `center` | middle of the box | the zone is a seating area, and boxes run past its bottom edge |
+| `body` | feet, ¾ height and middle — any one inside counts | one view has both standing and seated people |
+
+`body` also counts somebody leaning over the back of the sofa from behind it.
+That is the price of it, and usually worth paying.
+
+Set it per sensor in the sensor's `params` (`{"anchor": "body"}`) so one sofa
+station can differ from a station people stand at, or venue-wide with
+`STRIKEE_PERSON_ANCHOR`.
+
+**No anchor rescues a box that ends above the zone.** Every anchor point lies
+between the middle of the box and its bottom edge, so when only a head clears
+the seat back and the zone is drawn around the floor *in front of* the sofa,
+nothing inside the box reaches down into it. Redraw the zone over the seating
+area — around where people **appear in the picture**, not their footprint on
+the floor. `debug_frame` prints the count each anchor would give, which is how
+you tell the two cases apart:
+
+```
+IN USE  Station 3  occupancy  0 in zone   by anchor: feet=0  center=2  body=2   (using feet)
+```
+
+Two people the feet anchor is discarding. If every anchor reads 0 while the
+picture clearly shows people, it is the zone, not the anchor.
 
 ### Camera frames in the dashboard
 

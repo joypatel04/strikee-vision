@@ -55,10 +55,45 @@ def _on_segment(px, py, ax, ay, bx, by) -> bool:
     return False
 
 
-def detection_in_any_polygon(det: Detection, polygons: list) -> bool:
-    """True if the detection's ground point (feet) falls inside any polygon."""
-    gp = ground_point(det.bbox)
-    return any(point_in_polygon(gp, poly) for poly in polygons)
+# Which part of a person decides where they are. The right answer depends on
+# the furniture, not on the model.
+ANCHOR_FEET = "feet"
+ANCHOR_CENTER = "center"
+ANCHOR_BODY = "body"
+ANCHORS = (ANCHOR_FEET, ANCHOR_CENTER, ANCHOR_BODY)
+
+
+def anchor_points(bbox, anchor: str = ANCHOR_FEET) -> list:
+    """The points that count as 'where this person is', for the given anchor.
+
+    feet    bottom-centre. Correct for someone standing on a floor, and wrong
+            for everyone on a sofa: with their legs hidden behind the seat back
+            the box ends at their chest, so the point lands well above the
+            cushion and outside a zone drawn around the floor. The person is
+            detected and then discarded, which looks exactly like not being
+            detected at all.
+    center  the middle of the box. What you want when the zone is drawn around
+            a seating area rather than a footprint.
+    body    feet, middle and three-quarter height. Any one inside counts, so it
+            holds for someone standing AND someone seated in the same view -
+            at the cost of also counting somebody leaning over the back of the
+            sofa from behind it.
+    """
+    x1, y1, x2, y2 = bbox
+    mx = (x1 + x2) / 2.0
+    if anchor == ANCHOR_CENTER:
+        return [(mx, (y1 + y2) / 2.0)]
+    if anchor == ANCHOR_BODY:
+        return [(mx, y2), (mx, y1 + (y2 - y1) * 0.75), (mx, (y1 + y2) / 2.0)]
+    return [(mx, y2)]
+
+
+def detection_in_any_polygon(det: Detection, polygons: list,
+                             anchor: str = ANCHOR_FEET) -> bool:
+    """True if any of the detection's anchor points falls inside any polygon."""
+    return any(point_in_polygon(pt, poly)
+               for pt in anchor_points(det.bbox, anchor)
+               for poly in polygons)
 
 
 def detection_center_in_any_polygon(det: Detection, polygons: list) -> bool:

@@ -11,7 +11,9 @@ robust to a model that intermittently misses.
 """
 from __future__ import annotations
 
-from .geometry import detection_in_any_polygon, detection_center_in_any_polygon
+from .geometry import (ANCHOR_FEET, ANCHORS, anchor_points,
+                       detection_center_in_any_polygon,
+                       detection_in_any_polygon)
 from .types import Detection
 
 PERSON_KINDS = {"occupancy", "presence", "person"}
@@ -26,17 +28,36 @@ BALL_LABELS = {
 COLORED_LABELS = {"black_ball", "blue_ball", "brown_ball", "green_ball", "yellow_ball"}
 
 
+def person_anchor(sensor) -> str:
+    """Which part of a person decides whether they are in this zone.
+
+    Per-sensor first: a room usually has both kinds of seating, and the sofa
+    stations need a different answer from the ones people stand at.
+    """
+    import os
+
+    params = getattr(sensor, "params", None) or {}
+    anchor = params.get("anchor") or os.environ.get("STRIKEE_PERSON_ANCHOR")
+    anchor = (anchor or ANCHOR_FEET).strip().lower()
+    return anchor if anchor in ANCHORS else ANCHOR_FEET
+
+
 def observe_person(detections: list[Detection], sensor) -> dict:
-    """present when >=1 person's feet are in the zone."""
+    """present when >=1 person is in the zone, by the sensor's anchor."""
+    anchor = person_anchor(sensor)
     in_zone = [d for d in detections
                if d.label == "person"
                and d.confidence >= sensor.conf_threshold
-               and detection_in_any_polygon(d, sensor.zone_polygons)]
+               and detection_in_any_polygon(d, sensor.zone_polygons, anchor)]
     return {
         "present": len(in_zone) > 0,
         "count": len(in_zone),
         "confidence": max((d.confidence for d in in_zone), default=0.0),
-        "points": [_ground(d) for d in in_zone],
+        # The motion signal compares these between reads, so they must follow
+        # the anchor: mixing a feet point one tick with a centre point the next
+        # would read as movement that never happened.
+        "points": [anchor_points(d.bbox, anchor)[0] for d in in_zone],
+        "anchor": anchor,
     }
 
 

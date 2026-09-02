@@ -11,7 +11,7 @@ cannot drift into disagreeing about what green means.
 """
 from __future__ import annotations
 
-from .geometry import ground_point, point_in_polygon
+from .geometry import ANCHOR_FEET, anchor_points, point_in_polygon
 
 # BGR. Zone outlines carry the verdict, so they are the only saturated colours;
 # detections stay neutral so they never read as a verdict of their own.
@@ -24,11 +24,13 @@ BLACK = (0, 0, 0)
 
 
 def annotate(frame, zones=(), boxes=(), caption: str | None = None,
-             max_width: int | None = None):
+             max_width: int | None = None, anchor: str = ANCHOR_FEET):
     """Return an annotated copy of `frame`.
 
     zones  - (polygons, label, present, is_person) per sensor
     boxes  - (bbox, kind) per detection, kind "person" or "ball"
+    anchor - which part of a person decides where they are; the drawn dots must
+             match it, or the picture explains a decision nobody made
     """
     import cv2
     import numpy as np
@@ -52,16 +54,17 @@ def annotate(frame, zones=(), boxes=(), caption: str | None = None,
                 x, y = pts.min(axis=0)
                 _text(cv2, canvas, label, (int(x), max(16, int(y) - 6)), colour)
 
-    # The deciding point for each person, coloured by whether any zone holds it.
-    # This is the one that explains "detected but not counted": a seated player's
-    # feet land on the sofa, not the floor the zone was drawn around.
+    # The deciding points for each person, coloured by whether any zone holds
+    # them. This is what explains "detected but not counted": with the feet
+    # anchor, a seated player's box ends at their chest, so the dot lands above
+    # the cushion and outside a zone drawn around the floor.
     for bbox, kind in boxes:
         if kind != "person":
             continue
-        gx, gy = ground_point(bbox)
-        inside = any(point_in_polygon((gx, gy), p) for p in person_polys)
-        cv2.circle(canvas, (int(gx), int(gy)), 6, GREEN if inside else RED, -1)
-        cv2.circle(canvas, (int(gx), int(gy)), 6, WHITE, 1)
+        for gx, gy in anchor_points(bbox, anchor):
+            inside = any(point_in_polygon((gx, gy), p) for p in person_polys)
+            cv2.circle(canvas, (int(gx), int(gy)), 6, GREEN if inside else RED, -1)
+            cv2.circle(canvas, (int(gx), int(gy)), 6, WHITE, 1)
 
     if caption:
         cv2.rectangle(canvas, (0, 0), (canvas.shape[1], 30), BLACK, -1)

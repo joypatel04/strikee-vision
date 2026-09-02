@@ -10,7 +10,9 @@ from typing import Callable, Optional
 
 import math
 
-from .observe import SCREEN_KIND, observe, PERSON_KINDS, SNOOKER_KIND
+from .geometry import ANCHOR_FEET
+from .observe import (SCREEN_KIND, observe, PERSON_KINDS, SNOOKER_KIND,
+                      person_anchor)
 from .overlay import annotate
 from .perception import Detector
 from .sink import ChangeEvent, StateSink
@@ -290,8 +292,12 @@ class LiveRuntime:
             except (TypeError, ValueError):
                 stamp = str(stamp)
             caption = f"{src.name}  {stamp}"
+            person_sensor = next((s for s in src.sensors
+                                  if s.kind in PERSON_KINDS), None)
             canvas = annotate(frame, zones=zones, boxes=boxes, caption=caption,
-                              max_width=self.live_frames.max_width)
+                              max_width=self.live_frames.max_width,
+                              anchor=(person_anchor(person_sensor)
+                                      if person_sensor else ANCHOR_FEET))
             self.live_frames.write(self.venue_id, src.id, canvas)
         except Exception as exc:
             # Best-effort, but not silent: swallowing this whole is how you get
