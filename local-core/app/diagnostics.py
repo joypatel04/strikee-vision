@@ -26,6 +26,19 @@ from . import platform_env   # module, not names: ENV_FILE_PATH is rebound
                              # by load_env_file() after import time
 
 # name, default, parser, group, one-line description
+def _screen_threshold(value):
+    """Screen thresholds accept 'off'. Validated by the observer's own function
+    so the System check cannot disagree with what the pipeline actually does.
+
+    Reports a disabled signal as the string "off" rather than the infinity the
+    pipeline uses: this value is rendered into JSON for the dashboard, and
+    infinity is not JSON, so returning it turned the whole panel into a 500.
+    """
+    from .pipeline.observe import screen_threshold
+    parsed = screen_threshold(value)
+    return "off" if parsed == float("inf") else parsed
+
+
 _KNOBS: list[tuple[str, Optional[str], Callable[[str], Any], str, str]] = [
     # capture
     ("STRIKEE_MAX_STREAMS", "3", int, "capture",
@@ -57,13 +70,13 @@ _KNOBS: list[tuple[str, Optional[str], Callable[[str], Any], str, str]] = [
      "Pixel movement that counts as play."),
     ("STRIKEE_PERSON_ANCHOR", "feet", str, "state",
      "Which part of a person decides where they are: feet, center or body. Sofa seating wants body."),
-    ("STRIKEE_SCREEN_LUM", "120", float, "state",
+    ("STRIKEE_SCREEN_LUM", "120", _screen_threshold, "state",
      "Brightness in a screen zone that counts as the TV being on."),
-    ("STRIKEE_SCREEN_CONTRAST", "28", float, "state",
-     "Spread of brightness across a screen zone - content has structure, a reflection does not."),
-    ("STRIKEE_SCREEN_SAT", "14", float, "state",
-     "Colour in a screen zone - reflected room light is very nearly grey."),
-    ("STRIKEE_SCREEN_CHANGE", "6", float, "state",
+    ("STRIKEE_SCREEN_CONTRAST", "off", _screen_threshold, "state",
+     "Structure across a screen zone. 'off' disables it - it inverts where zones take in bezel and wall."),
+    ("STRIKEE_SCREEN_SAT", "off", _screen_threshold, "state",
+     "Colour in a screen zone. 'off' disables it - a reflected lamp is colourful."),
+    ("STRIKEE_SCREEN_CHANGE", "6", _screen_threshold, "state",
      "Frame-to-frame change in a screen zone that counts as the TV being on."),
     ("STRIKEE_SCREEN_HOLD_TICKS", "2", int, "state",
      "Dark reads a screen is forgiven before it closes the station."),

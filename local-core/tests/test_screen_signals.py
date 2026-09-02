@@ -391,3 +391,52 @@ def test_per_sensor_params_reach_the_running_pipeline():
         assert assets[0].sensors[0].params == {"screen_sat": 60}
     finally:
         db.close()
+
+
+# ------------------------------------------------ one definition, three users
+
+
+def test_off_is_understood_everywhere_it_is_parsed(monkeypatch):
+    """Regression: 'could not convert string to float: off'.
+
+    The thresholds were defined three times - the observer, the diagnostics
+    registry and tools/debug_frame.py - each with its own float(). The moment
+    the observer learned that "off" disables a signal and the copies did not,
+    the tool crashed on the very .env the tool had recommended.
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+
+    monkeypatch.setenv("STRIKEE_SCREEN_CONTRAST", "off")
+    monkeypatch.setenv("STRIKEE_SCREEN_SAT", "51")
+
+    from app.diagnostics import _screen_threshold
+    from app.pipeline.observe import screen_thresholds
+    from debug_frame import _screen_thresholds
+
+    assert screen_thresholds()["contrast"] == float("inf")
+    assert _screen_thresholds({})["contrast"] == float("inf")
+    assert _screen_threshold("off") == "off"      # JSON-safe for the dashboard
+
+
+def test_diagnostics_defaults_match_what_the_observer_actually_uses():
+    """A System check that reports a different default than the pipeline uses is
+    worse than no System check."""
+    from app.diagnostics import _KNOBS
+    from app.pipeline.observe import SCREEN_KNOBS, screen_threshold
+
+    registry = {name: default for name, default, *_ in _KNOBS}
+    for _short, _key, env, default in SCREEN_KNOBS:
+        assert env in registry, f"{env} is not in the diagnostics registry"
+        assert screen_threshold(registry[env]) == screen_threshold(default), (
+            f"{env}: System check says {registry[env]!r}, observer uses {default!r}")
+
+
+def test_a_disabled_signal_is_json_serialisable():
+    """Infinity is not JSON, and this value is rendered into the dashboard."""
+    import json
+
+    from app.diagnostics import _screen_threshold
+    json.dumps({"v": _screen_threshold("off")})       # must not raise
+    json.dumps({"v": _screen_threshold("146")})

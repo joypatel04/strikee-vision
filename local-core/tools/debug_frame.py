@@ -51,19 +51,15 @@ def _aspect(raw):
         return None
 
 
-SCREEN_KNOBS = (
-    ("lum", "screen_lum", "STRIKEE_SCREEN_LUM", 120.0),
-    ("change", "screen_change", "STRIKEE_SCREEN_CHANGE", 6.0),
-    ("contrast", "screen_contrast", "STRIKEE_SCREEN_CONTRAST", 28.0),
-    ("sat", "screen_sat", "STRIKEE_SCREEN_SAT", 14.0),
-)
-
-
 def _screen_thresholds(params) -> dict:
-    """Same precedence the observer uses: per-sensor params, then env, then default."""
-    params = params or {}
-    return {short: float(params.get(key, os.environ.get(env, default)))
-            for short, key, env, default in SCREEN_KNOBS}
+    """The observer's own thresholds - imported, not re-derived.
+
+    This used to be a second copy with its own float(), which crashed with
+    `could not convert string to float: 'off'` the moment the observer learned
+    that "off" disables a signal and this did not.
+    """
+    from app.pipeline.observe import screen_thresholds
+    return screen_thresholds(params)
 
 
 def watch_screens(sources, by_source, zones, assets, seconds: float,

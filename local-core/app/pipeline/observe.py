@@ -17,6 +17,45 @@ from .geometry import (ANCHOR_FEET, ANCHORS, anchor_points,
 from .types import Detection
 
 PERSON_KINDS = {"occupancy", "presence", "person"}
+
+# The screen thresholds, defined once. They were defined three times - here, in
+# the diagnostics registry and in tools/debug_frame.py - and the copies drifted
+# the moment two of them gained "off" as a value and the third did not, which
+# crashed the tool with `could not convert string to float: 'off'`.
+#   short name -> (env var, default)
+SCREEN_KNOBS = (
+    ("lum", "screen_lum", "STRIKEE_SCREEN_LUM", "120"),
+    ("change", "screen_change", "STRIKEE_SCREEN_CHANGE", "6"),
+    ("contrast", "screen_contrast", "STRIKEE_SCREEN_CONTRAST", "off"),
+    ("sat", "screen_sat", "STRIKEE_SCREEN_SAT", "off"),
+)
+
+SCREEN_DISABLED = ("off", "none", "no", "")
+
+
+def screen_threshold(value) -> float:
+    """A screen threshold. 'off' (or 'none') disables that signal entirely.
+
+    Disabling matters because a signal can be not merely useless at a venue but
+    backwards - measured over six stations, the OFF screens scored higher
+    contrast than the on ones - and "set it to 9999" is not an instruction
+    anyone should have to invent.
+    """
+    if isinstance(value, str) and value.strip().lower() in SCREEN_DISABLED:
+        return float("inf")
+    return float(value)
+
+
+def screen_thresholds(params=None) -> dict:
+    """Effective thresholds by short name: per-sensor params, then env, then
+    the default. The precedence the observer uses, for anyone reporting it."""
+    import os
+
+    params = params or {}
+    return {short: screen_threshold(params.get(key, os.environ.get(env, default)))
+            for short, key, env, default in SCREEN_KNOBS}
+
+
 SNOOKER_KIND = "snooker_game"
 SCREEN_KIND = "screen"
 
@@ -151,8 +190,6 @@ def observe_screen(frame, sensor, previous=None) -> dict:
     `previous` is the same zone's grey pixels from the last sample; without one
     there is no change signal. Returns the crop so the caller can pass it back.
     """
-    import os
-
     import numpy as np
 
     crop = _zone_crop(frame, sensor)
@@ -179,31 +216,14 @@ def observe_screen(frame, sensor, previous=None) -> dict:
     # vars are the venue-wide default.
     params = getattr(sensor, "params", None) or {}
 
-    def _p(key, env, default):
-        """A threshold, or infinity for a signal switched off.
-
-        Disabling matters because a signal can be not merely useless at a venue
-        but backwards. Measured across six stations here, the OFF screens scored
-        HIGHER contrast than the on ones - the zones take in bezel and wall, so a
-        dark panel against a lit room has more structure than a bright screen
-        showing a flat scene. A signal like that has to be removable, and
-        "set it to 9999" is not an instruction anyone should have to invent.
-        """
-        raw = params.get(key, os.environ.get(env, default))
-        if isinstance(raw, str) and raw.strip().lower() in ("off", "none", ""):
-            return float("inf")
-        return float(raw)
-
     # 120, not 90: an off panel reflecting room lighting measured 92-97 at one
-    # venue, so 90 called every dark TV "on" all evening.
-    lum_on = _p("screen_lum", "STRIKEE_SCREEN_LUM", 120.0)
-    change_on = _p("screen_change", "STRIKEE_SCREEN_CHANGE", 6.0)
-    # Structure and colour are OFF by default. They are real signals, but the
-    # only venue we have measured says they invert there, and a heuristic that
-    # is wrong half the time is worse than one that is absent. Turn them on when
-    # a --watch comparison shows they separate.
-    contrast_on = _p("screen_contrast", "STRIKEE_SCREEN_CONTRAST", "off")
-    sat_on = _p("screen_sat", "STRIKEE_SCREEN_SAT", "off")
+    # venue, so 90 called every dark TV "on" all evening. Structure and colour
+    # default to off - real signals, but the only venue we have measured says
+    # they invert there, and a heuristic that is wrong half the time is worse
+    # than one that is absent. Turn them on when --watch shows they separate.
+    t = screen_thresholds(params)
+    lum_on, change_on = t["lum"], t["change"]
+    contrast_on, sat_on = t["contrast"], t["sat"]
 
     on, reason, confidence = screen_verdict(
         luminance, change, contrast, saturation,
