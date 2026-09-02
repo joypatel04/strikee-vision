@@ -186,3 +186,67 @@ def test_no_separation_points_at_the_zone_not_the_numbers(capsys):
     out = capsys.readouterr().out
     assert "No signal separated" in out
     assert "--redraw" in out, "did not say what to actually do about it"
+
+
+# ------------------------------------- comparing stations in a single pass
+
+
+def _load_across():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    from debug_frame import _recommend_across
+    return _recommend_across
+
+
+def _group(**stations):
+    return {name: {"asset": name, "camera": "Gaming Camera B", "samples": 30,
+                   "stats": {m: {"min": v[0], "median": v[1], "max": v[2]}
+                             for m, v in stats.items()}}
+            for name, stats in stations.items()}
+
+
+def test_stations_on_versus_stations_off_in_one_pass(capsys):
+    """A venue mid-evening already contains both states - some playing, some
+    idle - so a threshold can be had without switching off a customer's TV."""
+    _load_across()(
+        _group(**{"Station 1": {"luminance": (74, 130, 205),
+                                "contrast": (44, 60, 78),
+                                "saturation": (25, 40, 58)},
+                  "Station 2": {"luminance": (96, 150, 198),
+                                "contrast": (41, 57, 69),
+                                "saturation": (23, 39, 55)}}),
+        _group(**{"Station 5": {"luminance": (92, 94, 97),
+                                "contrast": (6, 9, 13),
+                                "saturation": (2, 4, 7)},
+                  "Station 6": {"luminance": (90, 95, 99),
+                                "contrast": (7, 10, 15),
+                                "saturation": (2, 5, 9)}}))
+    out = capsys.readouterr().out
+
+    assert "overlaps" in out.split("luminance")[1].split("\n")[0]
+    assert "STRIKEE_SCREEN_LUM=" not in out
+    assert "STRIKEE_SCREEN_CONTRAST=" in out
+    assert "STRIKEE_SCREEN_SAT=" in out
+
+
+def test_pooling_uses_the_worst_station_not_the_average(capsys):
+    """One dim screen in the ON group must drag the threshold down with it, or
+    the recommendation works for five stations and fails on the sixth."""
+    _load_across()(
+        _group(**{"Bright": {"contrast": (60, 70, 80)},
+                  "Dim":    {"contrast": (30, 35, 40)}}),
+        _group(**{"Off": {"contrast": (5, 8, 12)}}))
+    out = capsys.readouterr().out
+    picked = int(out.split("STRIKEE_SCREEN_CONTRAST=")[1].split()[0])
+    assert picked < 30, f"threshold {picked} excludes the dim station"
+
+
+def test_it_says_the_evidence_is_weaker_than_a_two_state_run(capsys):
+    """Different televisions in different corners: a gap could be a difference
+    between the sets rather than between on and off."""
+    _load_across()(_group(**{"On": {"contrast": (40, 50, 60)}}),
+                   _group(**{"Off": {"contrast": (5, 8, 12)}}))
+    out = capsys.readouterr().out
+    assert "different televisions" in out
+    assert "--state on" in out, "did not say how to confirm it properly"

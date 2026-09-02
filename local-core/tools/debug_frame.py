@@ -67,7 +67,8 @@ def _screen_thresholds(params) -> dict:
 
 
 def watch_screens(sources, by_source, zones, assets, seconds: float,
-                  gap: float, state: str | None, out_dir: str) -> int:
+                  gap: float, state: str | None, out_dir: str,
+                  on_names: str | None = None) -> int:
     """Measure what the screen zones actually read, instead of guessing.
 
     A threshold picked from one reading is a coin flip: the number you happen to
@@ -151,13 +152,39 @@ def watch_screens(sources, by_source, zones, assets, seconds: float,
                                 "samples": len(rows), "stats": stats}
         print()
 
+    # A venue mid-evening already contains both states: some stations playing,
+    # some idle. Naming the ones that are on turns a single pass into the same
+    # comparison, without asking anyone to switch off a customer's TV.
+    if on_names:
+        wanted = {n.strip().lower() for n in on_names.split(",") if n.strip()}
+        known = {r["asset"].lower(): sid for sid, r in report.items()}
+        unknown = sorted(n for n in wanted if n not in known)
+        if unknown:
+            print(f"Not a station on a screen sensor: {', '.join(unknown)}")
+            print(f"Known: {', '.join(sorted(r['asset'] for r in report.values()))}")
+            return 2
+        on_report = {sid: r for sid, r in report.items()
+                     if r["asset"].lower() in wanted}
+        off_report = {sid: r for sid, r in report.items()
+                      if r["asset"].lower() not in wanted}
+        if not off_report:
+            print("Every station was named as on - nothing to compare against.")
+            return 2
+        _recommend_across(on_report, off_report)
+        return 0
+
     if not state:
-        print("""Run this twice with --state so the two can be compared:
+        print("""Compare two states to get a threshold. Either name the stations
+whose TVs are on right now, in one pass:
 
-    --watch 60 --state on      (TVs on, as they normally are)
-    --watch 60 --state off     (TVs off)
+    --watch 60 --on "Station 1,Station 2,Station 3"
 
-The second run prints the thresholds that separate them.""")
+or, when the room is empty, measure the same screens twice:
+
+    --watch 60 --state on       (TVs on)
+    --watch 60 --state off      (TVs off)
+
+The first needs no one to touch a TV, so it works during service.""")
         return 0
 
     out = Path(out_dir)
@@ -178,6 +205,81 @@ The second run prints the thresholds that separate them.""")
     return 0
 
 
+METRIC_ENVS = (("luminance", "STRIKEE_SCREEN_LUM"),
+               ("contrast", "STRIKEE_SCREEN_CONTRAST"),
+               ("saturation", "STRIKEE_SCREEN_SAT"),
+               ("change", "STRIKEE_SCREEN_CHANGE"))
+
+
+def _pool(report: dict, metric: str):
+    """Widest range this metric took across every station in the group."""
+    spans = [r["stats"].get(metric) for r in report.values()
+             if r["stats"].get(metric)]
+    if not spans:
+        return None
+    return {"min": min(s["min"] for s in spans),
+            "max": max(s["max"] for s in spans)}
+
+
+def _print_picks(usable: dict) -> None:
+    if usable:
+        print("Put these in .env - the most conservative value across cameras:\n")
+        for env, picks in usable.items():
+            print(f"    {env}={max(picks)}")
+        print("""
+A screen counts as on if it is bright, OR moving, OR structured AND coloured -
+so a signal that overlaps does no harm as long as one of the others separates.""")
+    else:
+        print("""No signal separated on from off.
+
+That usually means the zone takes in more than the panel: wall, a window, or a
+reflection on the bezel dilutes every statistic toward the room. Redraw it
+tight to the screen itself:
+
+    python field_setup.py --redraw --venue "..." --source-name "..." --mode screen""")
+
+
+def _recommend_across(on_report: dict, off_report: dict) -> None:
+    """Compare stations that are on against stations that are off, one pass.
+
+    Weaker evidence than measuring one screen in both states, and worth saying
+    so: these are different televisions in different corners, so a gap could be
+    a difference between the sets rather than between on and off. With a few
+    screens on each side it is still the right call, and it is the only version
+    of this measurement that can be taken during service.
+    """
+    on_names = ", ".join(sorted(r["asset"] for r in on_report.values()))
+    off_names = ", ".join(sorted(r["asset"] for r in off_report.values()))
+    print("=" * 68)
+    print(f"ON  ({len(on_report)}): {on_names}")
+    print(f"OFF ({len(off_report)}): {off_names}")
+    print("=" * 68 + "\n")
+
+    usable: dict = {}
+    for metric, env in METRIC_ENVS:
+        a, b = _pool(on_report, metric), _pool(off_report, metric)
+        if not a or not b:
+            print(f"    {metric:<11} not measured in both groups")
+            continue
+        gap = a["min"] - b["max"]
+        if gap > 0:
+            pick = round(b["max"] + gap / 2)
+            usable[env] = [pick]
+            print(f"    {metric:<11} on {a['min']:.0f}-{a['max']:.0f}  "
+                  f"off {b['min']:.0f}-{b['max']:.0f}   SEPARATES -> {env}={pick}")
+        else:
+            print(f"    {metric:<11} on {a['min']:.0f}-{a['max']:.0f}  "
+                  f"off {b['min']:.0f}-{b['max']:.0f}   overlaps, "
+                  f"cannot decide alone")
+
+    print("\n" + "=" * 68)
+    _print_picks(usable)
+    print("""
+Measured across different televisions, so confirm it when the room is empty:
+
+    --watch 60 --state on     then     --watch 60 --state off""")
+
+
 def _recommend(on_report: dict, off_report: dict) -> None:
     """Print the threshold for each signal, from the gap between on and off.
 
@@ -185,11 +287,6 @@ def _recommend(on_report: dict, off_report: dict) -> None:
     ones overlap matters as much as the numbers: at this venue brightness does
     overlap, and knowing that is what stops someone tuning it forever.
     """
-    METRICS = (("luminance", "STRIKEE_SCREEN_LUM"),
-               ("contrast", "STRIKEE_SCREEN_CONTRAST"),
-               ("saturation", "STRIKEE_SCREEN_SAT"),
-               ("change", "STRIKEE_SCREEN_CHANGE"))
-
     print("=" * 68)
     print("ON vs OFF")
     print("=" * 68)
@@ -199,7 +296,7 @@ def _recommend(on_report: dict, off_report: dict) -> None:
         if not off:
             continue
         print(f"\n{on['asset']}  ({on['camera']})")
-        for metric, env in METRICS:
+        for metric, env in METRIC_ENVS:
             a, b = on["stats"].get(metric), off["stats"].get(metric)
             if not a or not b:
                 print(f"    {metric:<11} not measured in both runs")
@@ -218,21 +315,7 @@ def _recommend(on_report: dict, off_report: dict) -> None:
                       f"cannot decide alone")
 
     print("\n" + "=" * 68)
-    if usable:
-        print("Put these in .env - the most conservative value across cameras:\n")
-        for env, picks in usable.items():
-            print(f"    {env}={max(picks)}")
-        print("""
-A screen counts as on if it is bright, OR moving, OR structured AND coloured -
-so a signal that overlaps does no harm as long as one of the others separates.""")
-    else:
-        print("""No signal separated on from off.
-
-That usually means the zone takes in more than the panel: wall, a window, or a
-reflection on the bezel dilutes every statistic toward the room. Redraw it
-tight to the screen itself:
-
-    python field_setup.py --redraw --venue "..." --source-name "..." --mode screen""")
+    _print_picks(usable)
 
 
 def main() -> int:
@@ -250,6 +333,10 @@ def main() -> int:
                          "this long and report the range of lum/change - run "
                          "it once with the TVs on and once with them off to "
                          "pick a threshold from data")
+    ap.add_argument("--on", dest="on_names", metavar="NAMES",
+                    help="comma-separated stations whose TVs are ON right now. "
+                         "Compares them against the rest in a single pass, so "
+                         "no one has to switch off a customer's TV")
     ap.add_argument("--state", choices=("on", "off"),
                     help="what the TVs were doing during a --watch run. Do one "
                          "of each and the second prints the thresholds that "
@@ -299,7 +386,8 @@ def main() -> int:
     # on this hardware that import alone costs more than the whole measurement.
     if args.watch:
         return watch_screens(sources, by_source, zones, assets,
-                             args.watch, args.gap, args.state, args.out)
+                             args.watch, args.gap, args.state, args.out,
+                             args.on_names)
 
     kinds = {s["type"] for s in sensors}
     person_det = snooker_det = None

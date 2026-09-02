@@ -358,9 +358,26 @@ Two more things it can tell you:
 .venv\Scripts\python.exe tools\debug_frame.py --venue "Strikee Club" --watch 60
 ```
 
-samples every screen zone for a minute. Add `--state on` / `--state off` and run
-it twice - once with the TVs on, once off - and the second run prints the
-thresholds that separate the two.
+samples every screen zone for a minute. To turn that into a threshold you need
+both states, and there are two ways to get them.
+
+**During service**, name the stations whose TVs are on right now — the room
+already contains both states, so one pass is enough and nobody has to switch off
+a customer's TV:
+
+```
+... --watch 60 --on "Station 1,Station 2,Station 3"
+```
+
+**When the room is empty**, measure the same screens twice, which is the
+stronger evidence because it compares each television against itself:
+
+```
+... --watch 60 --state on        then        ... --watch 60 --state off
+```
+
+Either way it prints the thresholds that separate on from off, and marks any
+signal whose ranges overlap as unusable.
 
 ### Why brightness alone cannot decide a screen
 
